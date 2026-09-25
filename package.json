@@ -1,0 +1,97 @@
+{
+  "name": "linker-script-studio",
+  "displayName": "Linker Script Studio",
+  "description": "Structured, editable view for GNU ld linker scripts (.ld/.lds), with a raw text view always available.",
+  "version": "0.1.0",
+  "publisher": "devdoesit",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#171E2B",
+    "theme": "dark"
+  },
+  "author": {
+    "name": "Devontae Reid",
+    "url": "https://www.devontaereid.com"
+  },
+  "homepage": "https://www.devontaereid.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/y0dev/ld-viewer-extension.git"
+  },
+  "bugs": {
+    "url": "https://github.com/y0dev/ld-viewer-extension/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other", "Programming Languages"],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "linkerScriptStudio.editor",
+        "displayName": "Linker Script Studio",
+        "selector": [
+          { "filenamePattern": "*.ld" },
+          { "filenamePattern": "*.lds" }
+        ],
+        "priority": "default"
+      }
+    ],
+    "configuration": {
+      "title": "Linker Script Studio",
+      "properties": {
+        "linkerScript.additionalExtensions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Additional file extensions (e.g. \".ldS\", \".ld.S\") or exact filenames (e.g. \"lscript\") that should open in Linker Script Studio."
+        },
+        "linkerScript.defaultView": {
+          "type": "string",
+          "enum": ["studio", "text"],
+          "default": "studio",
+          "description": "Which view (Studio or Text) to show by default when opening a linker script."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "linkerScriptStudio.toggleView",
+        "title": "Linker Script Studio: Toggle Studio/Text View"
+      },
+      {
+        "command": "linkerScriptStudio.openAsText",
+        "title": "Reopen With Text Editor",
+        "category": "Linker Script Studio"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "build:prod": "node esbuild.js --production",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "check-types": "tsc -p tsconfig.core.json --noEmit && tsc -p tsconfig.host.json --noEmit && tsc -p tsconfig.webview.json --noEmit",
+    "lint": "eslint src test",
+    "test": "mocha",
+    "pretest": "npm run check-types",
+    "vscode:prepublish": "npm run build:prod",
+    "package": "node scripts/clean-vsix.js && npm run check-types && npx --yes @vscode/vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.7",
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^7.16.0",
+    "@typescript-eslint/parser": "^7.16.0",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.23.0",
+    "eslint": "^8.57.0",
+    "mocha": "^10.6.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.3"
+  }
+}

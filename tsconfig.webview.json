@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2020", "DOM"],
+    "types": [],
+    "outDir": "dist/webview"
+  },
+  "include": ["src/webview/**/*.ts", "src/shared/**/*.ts"]
+}

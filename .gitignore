@@ -1,0 +1,13 @@
+node_modules/
+out/
+dist/
+*.vsix
+.vscode/settings.json
+.vscode-test/
+*.tsbuildinfo
+.testing_results/
+examples/binaries/.vscode/settings.json
+test/fixtures/generated/
+
+# Local-only Claude Code config / skills (never committed)
+.claude/

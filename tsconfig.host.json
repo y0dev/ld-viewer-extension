@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2020"],
+    "types": ["node", "vscode"],
+    "outDir": "dist/host"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/webview/**/*.ts"]
+}
