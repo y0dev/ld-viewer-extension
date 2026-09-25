@@ -3,13 +3,18 @@ import * as fs from "fs";
 import * as path from "path";
 import { parseLinkerScript } from "../../src/core/parser";
 import { validate } from "../../src/core/validate";
-import { addMemoryRegion, deleteOutputSection } from "../../src/core/edits";
+import { addMemoryRegion, deleteOutputSection, updateOutputSection } from "../../src/core/edits";
 import { applyTextEdits } from "../../src/core/serializer";
 
 const FIXTURES_DIR = path.join(__dirname, "..", "..", "fixtures");
+const EXAMPLES_DIR = path.join(__dirname, "..", "..", "examples");
 
 function readFixture(...parts: string[]): string {
   return fs.readFileSync(path.join(FIXTURES_DIR, ...parts), "utf8");
+}
+
+function readExample(name: string): string {
+  return fs.readFileSync(path.join(EXAMPLES_DIR, name), "utf8");
 }
 
 describe("real-world fixtures", () => {
@@ -84,4 +89,52 @@ describe("real-world fixtures", () => {
       assert.ok(!reparsed.sections!.sections.some((s) => s.name === targetName));
     });
   }
+});
+
+describe("real vendor files (examples/, unmodified)", () => {
+  it("parses the real Xilinx xilinx.ld with no diagnostics, including hyphenated section names", () => {
+    const src = readExample("xilinx.ld");
+    const { script, diagnostics } = parseLinkerScript(src);
+    assert.deepStrictEqual(diagnostics, []);
+    assert.strictEqual(script.sections!.sections.length, 37);
+    assert.ok(script.sections!.sections.some((s) => s.name === ".note.gnu.build-id"));
+    assert.ok(script.sections!.sections.some((s) => s.name === ".note-ABI-tag"));
+    assert.deepStrictEqual(validate(script), []);
+  });
+
+  it("parses the real PolarFire SoC mpfs-ddr-loaded-by-boot-loader.ld with no diagnostics", () => {
+    const src = readExample("mpfs-ddr-loaded-by-boot-loader.ld");
+    const { script, diagnostics } = parseLinkerScript(src);
+    assert.deepStrictEqual(diagnostics, []);
+    assert.strictEqual(script.memory!.regions.length, 16);
+    assert.strictEqual(script.sections!.sections.length, 8);
+    assert.deepStrictEqual(validate(script), []);
+  });
+
+  it("regression: reassigning xilinx.ld's .text region doesn't corrupt the following section", () => {
+    // This is the exact real-world scenario that surfaced the span-end bug
+    // (see the "span-end must not absorb trailing whitespace" describe
+    // block in edits.test.ts for the minimal repro): using the Studio
+    // view's mapping-table dropdown to move .text into a different region
+    // used to delete the blank line before .note.gnu.build-id and merge
+    // the two sections onto one line.
+    const src = readExample("xilinx.ld");
+    const { script } = parseLinkerScript(src);
+    const textSection = script.sections!.sections.find((s) => s.name === ".text")!;
+    const edits = updateOutputSection(script, ".text", {
+      name: textSection.name,
+      body: textSection.body,
+      vmaRegion: "psu_ddr_1_memory_1",
+    });
+    const next = applyTextEdits(src, edits);
+
+    assert.ok(!next.includes("memory_1;.note"), "sections must not merge onto one line");
+    assert.ok(next.includes("\n\n.note.gnu.build-id"), "the blank line before the next section must survive");
+
+    const { script: reparsed, diagnostics } = parseLinkerScript(next);
+    assert.deepStrictEqual(diagnostics, []);
+    assert.strictEqual(reparsed.sections!.sections.length, script.sections!.sections.length);
+    assert.strictEqual(reparsed.sections!.sections.find((s) => s.name === ".text")!.placement.vmaRegion, "psu_ddr_1_memory_1");
+    assert.deepStrictEqual(validate(reparsed), []);
+  });
 });

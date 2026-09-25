@@ -5,7 +5,7 @@
  */
 import { Diagnostic, LinkerScript, MemoryRegion, OutputSection } from "../core/model";
 import { OutputSectionInput } from "../core/serializer";
-import { HostMessage, ViewMode, WebviewMessage } from "../shared/messages";
+import { HostMessage, WebviewMessage } from "../shared/messages";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void; setState(s: unknown): void; getState(): unknown };
 const vscode = acquireVsCodeApi();
@@ -15,26 +15,25 @@ function post(message: WebviewMessage): void {
 }
 
 interface State {
-  text: string;
   model: LinkerScript | null;
   diagnostics: Diagnostic[];
-  view: ViewMode;
 }
 
-const state: State = { text: "", model: null, diagnostics: [], view: "studio" };
-let textareaFocused = false;
+const state: State = { model: null, diagnostics: [] };
+
+// Which sections are expanded in the Section Detail tree. Lives outside
+// `state` since it isn't server data -- it's re-derived from the model on
+// each update, but must survive across those updates (a diagnostic-only
+// change shouldn't collapse everything the user just expanded).
+const expandedSections = new Set<string>();
 
 const root = document.getElementById("root")!;
 
 window.addEventListener("message", (event: MessageEvent<HostMessage>) => {
   const msg = event.data;
   if (msg.type === "update") {
-    state.text = msg.text;
     state.model = msg.model;
     state.diagnostics = msg.diagnostics;
-    render();
-  } else if (msg.type === "setView") {
-    state.view = msg.view;
     render();
   } else if (msg.type === "editError") {
     showTransientError(msg.message);
@@ -42,9 +41,7 @@ window.addEventListener("message", (event: MessageEvent<HostMessage>) => {
 });
 
 function showTransientError(message: string): void {
-  const banner = document.createElement("div");
-  banner.className = "error-banner";
-  banner.textContent = message;
+  const banner = el("div", "error-banner", message);
   root.prepend(banner);
   setTimeout(() => banner.remove(), 6000);
 }
@@ -56,45 +53,73 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, t
   return e;
 }
 
+function icon(name: string): HTMLElement {
+  return el("i", `codicon codicon-${name}`);
+}
+
+function iconButton(name: string, label: string, extraClass?: string): HTMLButtonElement {
+  const btn = el("button", "icon-btn" + (extraClass ? ` ${extraClass}` : ""));
+  btn.append(icon(name));
+  btn.append(el("span", "icon-btn-label", label));
+  btn.setAttribute("aria-label", label);
+  return btn;
+}
+
 function render(): void {
-  // While the Text view's textarea has focus, skip re-rendering entirely --
-  // render() rebuilds the DOM from scratch, which would otherwise blow away
-  // in-progress typing on every host update. The textarea's onblur handler
-  // re-renders once the user is done.
-  if (textareaFocused) return;
   root.replaceChildren();
 
-  const tabs = el("div", "tabs");
-  const studioTab = el("button", "tab" + (state.view === "studio" ? " active" : ""), "Studio");
-  const textTab = el("button", "tab" + (state.view === "text" ? " active" : ""), "Text");
-  studioTab.disabled = state.model === null;
-  studioTab.onclick = () => setView("studio");
-  textTab.onclick = () => setView("text");
-  tabs.append(studioTab, textTab);
-  root.append(tabs);
+  const page = el("div", "page");
+
+  const header = el("div", "page-header");
+  const headerText = el("div");
+  headerText.append(el("h1", "page-title", "Linker Script"));
+  headerText.append(
+    el(
+      "p",
+      "page-subtitle",
+      "Controls where the sections of an executable are placed in memory. Define memory regions below, then choose which region each section lives in.",
+    ),
+  );
+  header.append(headerText);
+
+  const openAsTextBtn = iconButton("go-to-file", "Open as Text", "toolbar-btn");
+  openAsTextBtn.title = "Reopen this file with VS Code's default text editor";
+  openAsTextBtn.onclick = () => post({ type: "openAsText" });
+  header.append(openAsTextBtn);
+  page.append(header);
 
   if (state.model === null) {
     const notice = el("div", "notice", diagnosticsSummary(state.diagnostics) || "This file could not be parsed as a linker script.");
-    root.append(notice);
-    root.append(renderTextView());
+    page.append(notice);
+    root.append(page);
     return;
   }
 
-  if (state.view === "studio") {
-    root.append(renderStudioView(state.model));
-  } else {
-    root.append(renderTextView());
-  }
+  page.append(renderStudioView(state.model));
 
   if (state.diagnostics.length > 0) {
-    root.append(renderDiagnostics(state.diagnostics));
+    page.append(renderDiagnostics(state.diagnostics));
   }
+
+  root.append(page);
+  root.append(renderStatusBar(state.model, state.diagnostics));
 }
 
-function setView(view: ViewMode): void {
-  state.view = view;
-  post({ type: "setView", view });
-  render();
+function renderStatusBar(model: LinkerScript, diagnostics: Diagnostic[]): HTMLElement {
+  const bar = el("div", "status-bar");
+  const regionCount = model.memory?.regions.length ?? 0;
+  const sectionCount = model.sections?.sections.length ?? 0;
+  const errorCount = diagnostics.filter((d) => d.severity === "error").length;
+  const warningCount = diagnostics.filter((d) => d.severity === "warning").length;
+
+  bar.append(el("span", undefined, `${regionCount} memory region${regionCount === 1 ? "" : "s"}`));
+  bar.append(el("span", undefined, `${sectionCount} section${sectionCount === 1 ? "" : "s"}`));
+
+  const statusText = errorCount > 0 ? `${errorCount} error${errorCount === 1 ? "" : "s"}` : warningCount > 0 ? `${warningCount} warning${warningCount === 1 ? "" : "s"}` : "no problems";
+  const statusSpan = el("span", errorCount > 0 ? "status-error" : warningCount > 0 ? "status-warning" : undefined, statusText);
+  bar.append(statusSpan);
+
+  return bar;
 }
 
 function diagnosticsSummary(diagnostics: Diagnostic[]): string {
@@ -103,33 +128,16 @@ function diagnosticsSummary(diagnostics: Diagnostic[]): string {
 
 function renderDiagnostics(diagnostics: Diagnostic[]): HTMLElement {
   const container = el("div", "diagnostics");
-  container.append(el("h3", undefined, `Diagnostics (${diagnostics.length})`));
+  container.append(el("h3", "diagnostics-title", `Diagnostics (${diagnostics.length})`));
   const list = el("ul");
   for (const d of diagnostics) {
-    const item = el("li", `diagnostic ${d.severity}`, `${d.severity === "error" ? "⛔" : "⚠️"} ${d.message}`);
+    const item = el("li", `diagnostic ${d.severity}`);
+    item.append(icon(d.severity === "error" ? "error" : "warning"));
+    item.append(el("span", undefined, d.message));
     list.append(item);
   }
   container.append(list);
   return container;
-}
-
-function renderTextView(): HTMLElement {
-  const wrap = el("div", "text-view");
-  const textarea = el("textarea", "text-editor") as HTMLTextAreaElement;
-  textarea.value = state.text;
-  textarea.spellcheck = false;
-  textarea.onfocus = () => {
-    textareaFocused = true;
-  };
-  textarea.onblur = () => {
-    textareaFocused = false;
-    if (textarea.value !== state.text) {
-      post({ type: "setText", text: textarea.value });
-    }
-    render();
-  };
-  wrap.append(textarea);
-  return wrap;
 }
 
 function renderStudioView(model: LinkerScript): HTMLElement {
@@ -162,9 +170,37 @@ function formatHex(n: number): string {
   return "0x" + Math.trunc(n).toString(16).toUpperCase().padStart(8, "0");
 }
 
+/** "16,384 (16.0 KB)" style human-readable size, mirroring the sibling binary-structure-inspector's Sections view. */
+function formatSize(bytes: number): string {
+  const count = bytes.toLocaleString();
+  if (bytes < 1024) return `${count} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex++;
+  }
+  return `${count} (${value.toFixed(1)} ${units[unitIndex]})`;
+}
+
+// Cycled per region so adjacent segments in the memory bar stay visually
+// distinguishable. Pulled from VS Code's own charts.* theme colors, which
+// keeps the bar legible whether a light, dark, or high-contrast theme is
+// active -- rather than fixed hexes chosen against one theme.
+const REGION_PALETTE = [
+  "var(--vscode-charts-blue, #3794ff)",
+  "var(--vscode-charts-green, #89d185)",
+  "var(--vscode-charts-purple, #b180d7)",
+  "var(--vscode-charts-orange, #d19a66)",
+  "var(--vscode-charts-yellow, #cca700)",
+  "var(--vscode-charts-red, #f14c4c)",
+];
+
 function renderMemorySection(model: LinkerScript): HTMLElement {
   const section = el("div", "section");
-  section.append(el("h3", undefined, "Memory Regions"));
+  section.append(el("h2", "section-title", "Available Memory Regions"));
+  section.append(el("p", "section-subtitle", "Define and edit the memory regions. Each memory region has a name, base address, length, and attribute flags."));
 
   if (!model.memory) {
     section.append(el("p", "muted", "This script has no MEMORY block."));
@@ -174,6 +210,7 @@ function renderMemorySection(model: LinkerScript): HTMLElement {
   const range = regionRange(model);
   if (range) {
     const bar = el("div", "memory-bar");
+    let colorIndex = 0;
     for (const r of model.memory.regions) {
       if (r.origin.value === undefined || r.length.value === undefined) continue;
       const seg = el("div", "memory-bar-segment");
@@ -181,6 +218,8 @@ function renderMemorySection(model: LinkerScript): HTMLElement {
       const widthPct = Math.max((r.length.value / (range.max - range.min)) * 100, 0.5);
       seg.style.left = `${leftPct}%`;
       seg.style.width = `${widthPct}%`;
+      seg.style.background = REGION_PALETTE[colorIndex % REGION_PALETTE.length];
+      colorIndex++;
       seg.title = `${r.name}: ${formatHex(r.origin.value)} + ${formatHex(r.length.value)}`;
       seg.append(el("span", "memory-bar-label", r.name));
       bar.append(seg);
@@ -191,7 +230,7 @@ function renderMemorySection(model: LinkerScript): HTMLElement {
   const table = el("table", "memory-table");
   const thead = el("thead");
   const headRow = el("tr");
-  for (const h of ["Name", "Attrs", "Origin", "Length", "End", ""]) headRow.append(el("th", undefined, h));
+  for (const h of ["Name", "Attrs", "Base Address", "Size", "End", ""]) headRow.append(el("th", undefined, h));
   thead.append(headRow);
   table.append(thead);
 
@@ -202,9 +241,9 @@ function renderMemorySection(model: LinkerScript): HTMLElement {
   table.append(tbody);
   section.append(table);
 
-  const buttonRow = el("div", "add-button-row");
-  const addBtn = el("button", "add-button", "+ Add region");
-  const addSharedBtn = el("button", "add-button", "+ Add shared memory");
+  const buttonRow = el("div", "action-row");
+  const addBtn = iconButton("add", "Add memory region", "action-btn-primary");
+  const addSharedBtn = iconButton("layers", "Add shared memory");
   addBtn.onclick = () => {
     buttonRow.remove();
     section.append(renderMemoryAddForm(section, buttonRow));
@@ -219,61 +258,54 @@ function renderMemorySection(model: LinkerScript): HTMLElement {
   return section;
 }
 
+/** Reads all four fields live from the row's own inputs and sends the full row as the patch, keyed by the name the row was rendered with -- safe even if the name field itself was just edited (see main.ts module doc). */
 function renderMemoryRow(r: MemoryRegion): HTMLElement {
-  const row = el("tr");
-  const nameCell = el("td", undefined, r.name);
-  const attrsCell = el("td", undefined, r.attributes);
-  const originCell = el("td", "mono", r.origin.value !== undefined ? formatHex(r.origin.value) : r.origin.raw);
-  const lengthCell = el("td", "mono", r.length.value !== undefined ? formatHex(r.length.value) : r.length.raw);
-  const endCell = el(
-    "td",
-    "mono",
-    r.origin.value !== undefined && r.length.value !== undefined ? formatHex(r.origin.value + r.length.value) : "",
-  );
-  const actionsCell = el("td", "actions");
+  const originalName = r.name;
+  const row = el("tr", "editable-row");
 
-  const editBtn = el("button", "icon-button", "Edit");
-  editBtn.onclick = () => {
-    row.replaceWith(renderMemoryEditRow(r, row));
-  };
-  const deleteBtn = el("button", "icon-button danger", "Delete");
-  deleteBtn.onclick = () => post({ type: "deleteMemoryRegion", name: r.name });
-
-  actionsCell.append(editBtn, deleteBtn);
-  row.append(nameCell, attrsCell, originCell, lengthCell, endCell, actionsCell);
-  return row;
-}
-
-function renderMemoryEditRow(r: MemoryRegion, original: HTMLElement): HTMLElement {
-  const row = el("tr", "editing");
-  const nameInput = el("input") as HTMLInputElement;
+  const nameInput = el("input", "cell-input mono") as HTMLInputElement;
   nameInput.value = r.name;
-  const attrsInput = el("input") as HTMLInputElement;
+  const attrsInput = el("input", "cell-input mono") as HTMLInputElement;
   attrsInput.value = r.attributes;
-  const originInput = el("input") as HTMLInputElement;
+  attrsInput.placeholder = "rwx";
+  const originInput = el("input", "cell-input mono") as HTMLInputElement;
   originInput.value = r.origin.raw;
-  const lengthInput = el("input") as HTMLInputElement;
+  const lengthInput = el("input", "cell-input mono") as HTMLInputElement;
   lengthInput.value = r.length.raw;
 
-  for (const input of [nameInput, attrsInput, originInput, lengthInput]) {
+  const commit = () => {
+    post({
+      type: "updateMemoryRegion",
+      name: originalName,
+      patch: { name: nameInput.value.trim(), attributes: attrsInput.value.trim(), origin: originInput.value.trim(), length: lengthInput.value.trim() },
+    });
+  };
+  for (const input of [nameInput, attrsInput, originInput]) {
+    input.onchange = commit;
     const cell = el("td");
     cell.append(input);
     row.append(cell);
   }
 
+  lengthInput.onchange = commit;
+  const lengthCell = el("td", "size-cell");
+  lengthCell.append(lengthInput);
+  if (r.length.value !== undefined) lengthCell.append(el("span", "size-hint", formatSize(r.length.value)));
+  row.append(lengthCell);
+
+  const endCell = el(
+    "td",
+    "mono end-cell",
+    r.origin.value !== undefined && r.length.value !== undefined ? formatHex(r.origin.value + r.length.value) : "",
+  );
+  row.append(endCell);
+
   const actionsCell = el("td", "actions");
-  const saveBtn = el("button", "icon-button primary", "Save");
-  saveBtn.onclick = () => {
-    post({
-      type: "updateMemoryRegion",
-      name: r.name,
-      patch: { name: nameInput.value, attributes: attrsInput.value, origin: originInput.value, length: lengthInput.value },
-    });
-  };
-  const cancelBtn = el("button", "icon-button", "Cancel");
-  cancelBtn.onclick = () => row.replaceWith(original);
-  actionsCell.append(saveBtn, cancelBtn);
+  const deleteBtn = iconButton("trash", "Delete", "danger");
+  deleteBtn.onclick = () => post({ type: "deleteMemoryRegion", name: originalName });
+  actionsCell.append(deleteBtn);
   row.append(actionsCell);
+
   return row;
 }
 
@@ -288,7 +320,7 @@ function renderMemoryAddForm(section: HTMLElement, buttonRow: HTMLElement): HTML
   const lengthInput = el("input") as HTMLInputElement;
   lengthInput.placeholder = "LENGTH (e.g. 0x1000)";
 
-  const saveBtn = el("button", "icon-button primary", "Add");
+  const saveBtn = el("button", "action-btn action-btn-primary", "Add");
   saveBtn.onclick = () => {
     if (!nameInput.value.trim()) return;
     post({
@@ -298,7 +330,7 @@ function renderMemoryAddForm(section: HTMLElement, buttonRow: HTMLElement): HTML
     form.remove();
     section.append(buttonRow);
   };
-  const cancelBtn = el("button", "icon-button", "Cancel");
+  const cancelBtn = el("button", "action-btn", "Cancel");
   cancelBtn.onclick = () => {
     form.remove();
     section.append(buttonRow);
@@ -333,7 +365,7 @@ function renderSharedMemoryAddForm(section: HTMLElement, buttonRow: HTMLElement,
   const fieldsRow = el("div", "add-form-fields");
   fieldsRow.append(nameInput, attrsInput, originInput, lengthInput, sectionNameInput);
 
-  const saveBtn = el("button", "icon-button primary", "Add");
+  const saveBtn = el("button", "action-btn action-btn-primary", "Add");
   saveBtn.onclick = () => {
     const regionName = nameInput.value.trim();
     if (!regionName) return;
@@ -353,7 +385,7 @@ function renderSharedMemoryAddForm(section: HTMLElement, buttonRow: HTMLElement,
     form.remove();
     section.append(buttonRow);
   };
-  const cancelBtn = el("button", "icon-button", "Cancel");
+  const cancelBtn = el("button", "action-btn", "Cancel");
   cancelBtn.onclick = () => {
     form.remove();
     section.append(buttonRow);
@@ -379,8 +411,8 @@ function sectionToInput(s: OutputSection, overrides: { vmaRegion: string | undef
 
 function renderSectionRegionMappingTable(model: LinkerScript, sections: OutputSection[]): HTMLElement {
   const wrap = el("div", "mapping-table-wrap");
-  wrap.append(el("h4", "mapping-title", "Section to Memory Region Mapping"));
-  wrap.append(el("p", "form-help", "A list of linker sections and their associated memory regions."));
+  wrap.append(el("h3", "subsection-title", "Section to Memory Region Mapping"));
+  wrap.append(el("p", "section-subtitle", "A list of linker sections and their associated memory regions."));
 
   const table = el("table", "mapping-table");
   const thead = el("thead");
@@ -426,7 +458,8 @@ function renderSectionRegionMappingTable(model: LinkerScript, sections: OutputSe
 
 function renderSectionsSection(model: LinkerScript): HTMLElement {
   const section = el("div", "section");
-  section.append(el("h3", undefined, "Output Sections"));
+  section.append(el("h2", "section-title", "Output Sections"));
+  section.append(el("p", "section-subtitle", "The sections that make up the linked output, in link order, and where each one is placed."));
 
   if (!model.sections) {
     section.append(el("p", "muted", "This script has no SECTIONS block."));
@@ -435,6 +468,25 @@ function renderSectionsSection(model: LinkerScript): HTMLElement {
 
   section.append(renderSectionRegionMappingTable(model, model.sections.sections));
 
+  const detailHeader = el("div", "detail-header");
+  detailHeader.append(el("h3", "subsection-title", "Section Detail"));
+  const expandAllBtn = el("button", "action-btn action-btn-small", "Expand all");
+  const collapseAllBtn = el("button", "action-btn action-btn-small", "Collapse all");
+  expandAllBtn.onclick = () => {
+    for (const s of model.sections!.sections) expandedSections.add(s.name);
+    render();
+  };
+  collapseAllBtn.onclick = () => {
+    expandedSections.clear();
+    render();
+  };
+  detailHeader.append(expandAllBtn, collapseAllBtn);
+  section.append(detailHeader);
+
+  const treeHeader = el("div", "tree-header");
+  treeHeader.append(el("span"), el("span", undefined, "Name"), el("span", undefined, "Placement"), el("span"));
+  section.append(treeHeader);
+
   const tree = el("ul", "sections-tree");
   for (const s of model.sections.sections) {
     tree.append(renderSectionNode(s));
@@ -442,7 +494,7 @@ function renderSectionsSection(model: LinkerScript): HTMLElement {
   section.append(tree);
 
   const regionNames = model.memory?.regions.map((r) => r.name) ?? [];
-  const addBtn = el("button", "add-button", "+ Add section");
+  const addBtn = iconButton("add", "Add section", "action-btn-primary");
   addBtn.onclick = () => section.append(renderSectionAddForm(section, addBtn, regionNames));
   section.append(addBtn);
 
@@ -465,7 +517,7 @@ function renderSectionAddForm(section: HTMLElement, addBtn: HTMLElement, regionN
     regionSelect.append(opt);
   }
 
-  const saveBtn = el("button", "icon-button primary", "Add");
+  const saveBtn = el("button", "action-btn action-btn-primary", "Add");
   saveBtn.onclick = () => {
     if (!nameInput.value.trim()) return;
     post({
@@ -475,7 +527,7 @@ function renderSectionAddForm(section: HTMLElement, addBtn: HTMLElement, regionN
     form.remove();
     section.append(addBtn);
   };
-  const cancelBtn = el("button", "icon-button", "Cancel");
+  const cancelBtn = el("button", "action-btn", "Cancel");
   cancelBtn.onclick = () => {
     form.remove();
     section.append(addBtn);
@@ -488,17 +540,34 @@ function renderSectionAddForm(section: HTMLElement, addBtn: HTMLElement, regionN
 function renderSectionNode(s: OutputSection): HTMLElement {
   const item = el("li", "section-node");
   const header = el("div", "section-node-header");
+
+  const hasBody = s.body.length > 0;
+  const expanded = expandedSections.has(s.name);
+
+  const chevron = el("button", "chevron-btn");
+  if (hasBody) chevron.append(icon(expanded ? "chevron-down" : "chevron-right"));
+  chevron.disabled = !hasBody;
+  chevron.setAttribute("aria-label", expanded ? "Collapse" : "Expand");
+  chevron.onclick = () => {
+    if (expanded) expandedSections.delete(s.name);
+    else expandedSections.add(s.name);
+    render();
+  };
+  header.append(chevron);
+
+  header.append(el("span", "section-name", s.name));
+
   const placement: string[] = [];
   if (s.placement.vmaRegion) placement.push(`> ${s.placement.vmaRegion}`);
   if (s.placement.lmaRegion) placement.push(`AT> ${s.placement.lmaRegion}`);
-  header.append(el("span", "section-name", s.name), el("span", "section-placement", placement.join(" ")));
+  header.append(el("span", "section-placement", placement.join(" ")));
 
-  const deleteBtn = el("button", "icon-button danger", "Delete");
+  const deleteBtn = iconButton("trash", "Delete", "danger");
   deleteBtn.onclick = () => post({ type: "deleteOutputSection", name: s.name });
   header.append(deleteBtn);
   item.append(header);
 
-  if (s.body.length > 0) {
+  if (hasBody && expanded) {
     const bodyList = el("ul", "section-body");
     for (const stmt of s.body) {
       let text: string;

@@ -3,6 +3,19 @@ import { parseLinkerScript } from "../../src/core/parser";
 import { validate } from "../../src/core/validate";
 
 describe("SECTIONS block parsing", () => {
+  it("parses hyphenated section names as a single name, not a subtraction", () => {
+    const src = `SECTIONS {
+  .note.gnu.build-id : { KEEP (*(.note.gnu.build-id)) } > ram
+  .note-ABI-tag : { *(.note-ABI-tag) } > ram
+}`;
+    const { script, diagnostics } = parseLinkerScript(src);
+    assert.deepStrictEqual(diagnostics, []);
+    assert.deepStrictEqual(
+      script.sections!.sections.map((s) => s.name),
+      [".note.gnu.build-id", ".note-ABI-tag"],
+    );
+  });
+
   it("parses a typical .text section with KEEP, ALIGN, symbols, and placement", () => {
     const src = `SECTIONS
 {

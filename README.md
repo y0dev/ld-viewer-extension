@@ -1,9 +1,9 @@
 # Linker Script Studio
 
 A VS Code extension that opens GNU `ld` linker scripts (`.ld`, `.lds`) as a
-custom editor with two views, toggled like a tab bar:
+custom editor:
 
-- **Studio** (default): memory regions as a table with a proportional
+- **Studio**: memory regions as an always-editable table with a proportional
   address-space bar, a "Section to Memory Region Mapping" table (each output
   section next to a dropdown of available regions, reassignable in one
   click), and an output-section tree with the full detail (input-section
@@ -12,11 +12,15 @@ custom editor with two views, toggled like a tab bar:
   regions and output sections here, including a "+ Add shared memory" preset
   that adds a region plus a paired `(NOLOAD)` reserved section for a
   cross-core shared buffer.
-- **Text**: the raw file content, always available, for anything the Studio
-  view can't yet represent.
-
-Both views are backed by the same `vscode.TextDocument`, so save/undo/dirty
-state work exactly like a normal text editor.
+- **Text**: not a second render mode of the webview -- the "Open as Text"
+  button reopens the exact same document with VS Code's own default text
+  editor (`linkerScriptStudio.openAsText` command; `linkerScriptStudio.openAsStudio`
+  goes back). That gives real syntax highlighting, line numbers, find/
+  replace, and undo/redo, for anything Studio can't yet represent, instead
+  of a custom textarea trying to imitate an editor. Both editor types are
+  backed by the same `vscode.TextDocument`, so edits made in either flow
+  into the other automatically, and save/undo/dirty state work exactly like
+  a normal text editor.
 
 ## Architecture
 
@@ -39,7 +43,15 @@ state work exactly like a normal text editor.
   `vscode.workspace.applyEdit`.
 - `src/webview/` -- the Studio view's UI (vanilla DOM, no framework),
   talking to the host only through the typed `postMessage` protocol in
-  `src/shared/messages.ts`.
+  `src/shared/messages.ts`. Styled with `media/main.css` against VS Code's
+  own theme variables (`--vscode-*`) rather than fixed colors, and uses
+  `@vscode/codicons` (`media/codicon/`) for icon buttons so actions look
+  native rather than like generic HTML form controls. The webview's
+  `localResourceRoots` must cover every directory a resource is served
+  from (`dist` for the bundle, `media` for the stylesheet and codicon
+  font) -- too narrow a root doesn't error, it silently blocks the
+  resource, so double-check this after adding a new webview asset
+  directory.
 - Two esbuild bundles: `dist/extension.js` (`platform: node`) and
   `dist/webview/main.js` (`platform: browser`), matching build targets to
   what's actually available in each context.
@@ -57,8 +69,9 @@ regions/sections, indentation elsewhere in the file) survives byte-for-byte.
 The explicit tradeoff: a node that **is** edited has its entire span
 replaced by canonical pretty-printed text, so that node's own internal
 comments/formatting are not preserved, and a newly added region/section is
-appended with no comment. The Text view is the escape hatch either way --
-nothing is only editable through the lossy path.
+appended with no comment. Opening the file as text (VS Code's native editor,
+same document) is the escape hatch either way -- nothing is only editable
+through the lossy path.
 
 ## Scope
 
@@ -71,8 +84,8 @@ than crashing or silently corrupting the file.
 **Explicitly out of scope (first pass):** scripts that require the C
 preprocessor before they're valid ld syntax (`#include`/`#define`/`#if` at
 BSP-generated files sometimes do this). These are detected up front
-(`detectNeedsPreprocessor`) and routed to Text-view-only with a clear
-notice, rather than producing a broken parse.
+(`detectNeedsPreprocessor`); the Studio view shows a notice and the file is
+still editable via "Open as Text", rather than producing a broken parse.
 
 ## Development
 

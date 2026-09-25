@@ -112,6 +112,21 @@ class Cursor {
     return t;
   }
 
+  /**
+   * The end offset of the last token actually consumed. Use this -- never
+   * `peek().start` -- for a construct's span end: `peek().start` is the
+   * start of the NEXT, not-yet-consumed token, which reaches past this
+   * construct's own text into the whitespace/blank-line trivia that
+   * precedes that next token. A span built from `peek().start` silently
+   * absorbs that trivia as if it belonged to this construct, so replacing
+   * the span on an edit deletes the blank line separating this construct
+   * from its unedited neighbor (see the "next region/section merges onto
+   * one line" class of bug this was written to fix).
+   */
+  lastEnd(): number {
+    return this.tokens[Math.max(0, this.i - 1)].end;
+  }
+
   /** Finds the index of the token that matches the '(' or '{' at `openIdx`. Returns -1 if unmatched. */
   findMatching(openIdx: number): number {
     const open = this.tokens[openIdx].text;
@@ -310,6 +325,32 @@ function parseMemoryExpr(cur: Cursor, diagnostics: Diagnostic[]): Expr {
   return makeExprFromRaw(raw);
 }
 
+/**
+ * Consumes a NAME token, then extends it through any immediately-adjacent
+ * (no whitespace) "-ident"/"-number" continuations, so names like
+ * ".note.gnu.build-id" or ".note-ABI-tag" parse as one name instead of
+ * being split at the tokenizer level into an ident then a "-" operator
+ * (subtraction never appears directly after a name that opens a MEMORY
+ * region or output section declaration, so adjacency is an unambiguous
+ * signal here). Real GNU ld resolves this with lexer states; this is a
+ * cheap approximation for the same real-world names.
+ */
+function readHyphenatedName(cur: Cursor): { text: string; startTok: Token; endPos: number } {
+  const startTok = cur.peek();
+  let endPos = startTok.end;
+  cur.advance();
+  for (;;) {
+    const dash = cur.peek();
+    if (dash.kind !== "op" || dash.text !== "-" || dash.leadingTrivia !== "") break;
+    const next = cur.peek(1);
+    if ((next.kind !== "ident" && next.kind !== "number") || next.leadingTrivia !== "") break;
+    cur.advance(); // '-'
+    cur.advance(); // continuation
+    endPos = next.end;
+  }
+  return { text: cur.source.slice(startTok.start, endPos), startTok, endPos };
+}
+
 function parseMemoryBlock(cur: Cursor, diagnostics: Diagnostic[]): MemoryBlock {
   const blockStart = cur.peek().start;
   cur.advance(); // MEMORY
@@ -330,7 +371,7 @@ function parseMemoryBlock(cur: Cursor, diagnostics: Diagnostic[]): MemoryBlock {
       continue;
     }
     const regionStart = nameTok.start;
-    cur.advance();
+    const regionName = readHyphenatedName(cur).text;
 
     let attributes = "";
     if (cur.at("punct", "(")) {
@@ -378,15 +419,15 @@ function parseMemoryBlock(cur: Cursor, diagnostics: Diagnostic[]): MemoryBlock {
     if (!sawOrigin || !sawLength) {
       diagnostics.push({
         severity: "error",
-        message: `Memory region "${nameTok.text}" is missing ${!sawOrigin ? "ORIGIN" : "LENGTH"}.`,
-        span: { start: regionStart, end: cur.peek().start },
+        message: `Memory region "${regionName}" is missing ${!sawOrigin ? "ORIGIN" : "LENGTH"}.`,
+        span: { start: regionStart, end: cur.lastEnd() },
         code: "missing-origin-or-length",
       });
     }
 
-    const regionEnd = cur.peek().start; // start of next token (next region name or '}')
+    const regionEnd = cur.lastEnd();
     regions.push({
-      name: nameTok.text,
+      name: regionName,
       attributes,
       origin,
       length,
@@ -460,10 +501,9 @@ function parseSectionsBlock(cur: Cursor, diagnostics: Diagnostic[], topLevelAssi
 }
 
 function parseOutputSection(cur: Cursor, diagnostics: Diagnostic[]): OutputSection {
-  const nameTok = cur.peek();
-  const leadingComments = extractLeadingComments(nameTok.leadingTrivia);
+  const leadingComments = extractLeadingComments(cur.peek().leadingTrivia);
+  const { text: sectionName, startTok: nameTok } = readHyphenatedName(cur);
   const sectionStart = nameTok.start;
-  cur.advance();
 
   let address: Expr | undefined;
   if (!cur.at("punct", ":")) {
@@ -496,9 +536,9 @@ function parseOutputSection(cur: Cursor, diagnostics: Diagnostic[]): OutputSecti
 
   if (cur.at("punct", ";")) cur.advance();
 
-  const sectionEnd = cur.peek().start;
+  const sectionEnd = cur.lastEnd();
   return {
-    name: nameTok.text,
+    name: sectionName,
     address,
     body,
     placement,
@@ -561,7 +601,7 @@ function parseSectionBodyStatement(cur: Cursor, diagnostics: Diagnostic[]): Sect
     const pattern = parseInputSectionPattern(cur, diagnostics, true);
     if (closeIdx !== -1) cur.i = closeIdx + 1;
     if (cur.at("punct", ";")) cur.advance();
-    return { ...pattern, span: { start, end: cur.peek().start } };
+    return { ...pattern, span: { start, end: cur.lastEnd() } };
   }
 
   if (t.kind === "ident" && (t.text === "PROVIDE" || t.text === "PROVIDE_HIDDEN")) {
@@ -582,7 +622,7 @@ function parseSectionBodyStatement(cur: Cursor, diagnostics: Diagnostic[]): Sect
       operator: "=",
       value,
       provide,
-      span: { start, end: cur.peek().start },
+      span: { start, end: cur.lastEnd() },
     } satisfies SymbolAssignment;
   }
 
@@ -590,7 +630,7 @@ function parseSectionBodyStatement(cur: Cursor, diagnostics: Diagnostic[]): Sect
   if (looksLikeInputSectionPattern(cur)) {
     const pattern = parseInputSectionPattern(cur, diagnostics, false);
     if (cur.at("punct", ";")) cur.advance();
-    return { ...pattern, span: { start, end: cur.peek().start } };
+    return { ...pattern, span: { start, end: cur.lastEnd() } };
   }
 
   // Otherwise: location-counter or symbol assignment, e.g. ". = ALIGN(4);" or "_end = .;"
@@ -617,7 +657,7 @@ function parseSectionBodyStatement(cur: Cursor, diagnostics: Diagnostic[]): Sect
       return {
         kind: "align",
         raw: `. = ${value.raw};`,
-        span: { start, end: cur.peek().start },
+        span: { start, end: cur.lastEnd() },
       } satisfies AlignDirective;
     }
     return {
@@ -626,7 +666,7 @@ function parseSectionBodyStatement(cur: Cursor, diagnostics: Diagnostic[]): Sect
       operator,
       value,
       provide: "none",
-      span: { start, end: cur.peek().start },
+      span: { start, end: cur.lastEnd() },
     } satisfies SymbolAssignment;
   }
 
@@ -640,7 +680,7 @@ function parseSectionBodyStatement(cur: Cursor, diagnostics: Diagnostic[]): Sect
   return {
     kind: "align",
     raw: "",
-    span: { start, end: cur.peek().start },
+    span: { start, end: cur.lastEnd() },
   };
 }
 
@@ -695,7 +735,7 @@ function parseInputSectionPattern(cur: Cursor, diagnostics: Diagnostic[], keep: 
     fileGlob,
     sectionGlobs,
     keep,
-    span: { start, end: cur.peek().start },
+    span: { start, end: cur.lastEnd() },
   };
 }
 
@@ -712,7 +752,7 @@ function parseEntry(cur: Cursor): EntryDirective {
     if (cur.at("punct", ")")) cur.advance();
   }
   if (cur.at("punct", ";")) cur.advance();
-  return { kind: "entry", symbol, span: { start, end: cur.peek().start } };
+  return { kind: "entry", symbol, span: { start, end: cur.lastEnd() } };
 }
 
 function parseOutputFormat(cur: Cursor): OutputFormatDirective {
@@ -731,7 +771,7 @@ function parseOutputFormat(cur: Cursor): OutputFormatDirective {
     if (cur.at("punct", ")")) cur.advance();
   }
   if (cur.at("punct", ";")) cur.advance();
-  return { kind: "output-format", args, span: { start, end: cur.peek().start } };
+  return { kind: "output-format", args, span: { start, end: cur.lastEnd() } };
 }
 
 function parseOutputArch(cur: Cursor): OutputArchDirective {
@@ -750,7 +790,7 @@ function parseOutputArch(cur: Cursor): OutputArchDirective {
     if (cur.at("punct", ")")) cur.advance();
   }
   if (cur.at("punct", ";")) cur.advance();
-  return { kind: "output-arch", arch, span: { start, end: cur.peek().start } };
+  return { kind: "output-arch", arch, span: { start, end: cur.lastEnd() } };
 }
 
 function parseInclude(cur: Cursor): IncludeDirective {
@@ -766,7 +806,7 @@ function parseInclude(cur: Cursor): IncludeDirective {
     cur.advance();
   }
   if (cur.at("punct", ";")) cur.advance();
-  return { kind: "include", path, span: { start, end: cur.peek().start } };
+  return { kind: "include", path, span: { start, end: cur.lastEnd() } };
 }
 
 function parseProvide(cur: Cursor): TopLevelAssignment {
@@ -787,7 +827,7 @@ function parseProvide(cur: Cursor): TopLevelAssignment {
     if (cur.at("punct", ")")) cur.advance();
   }
   if (cur.at("punct", ";")) cur.advance();
-  return { kind: "assignment", name, operator: "=", value, provide, span: { start, end: cur.peek().start }, leadingComments };
+  return { kind: "assignment", name, operator: "=", value, provide, span: { start, end: cur.lastEnd() }, leadingComments };
 }
 
 function parseAssignment(cur: Cursor): TopLevelAssignment {
@@ -806,7 +846,7 @@ function parseAssignment(cur: Cursor): TopLevelAssignment {
     operator,
     value,
     provide: "none",
-    span: { start, end: cur.peek().start },
+    span: { start, end: cur.lastEnd() },
     leadingComments,
   };
 }

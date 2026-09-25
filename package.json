@@ -2,7 +2,7 @@
   "name": "linker-script-studio",
   "displayName": "Linker Script Studio",
   "description": "Structured, editable view for GNU ld linker scripts (.ld/.lds), with a raw text view always available.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "devdoesit",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -25,7 +25,10 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other", "Programming Languages"],
+  "categories": [
+    "Other",
+    "Programming Languages"
+  ],
   "activationEvents": [],
   "main": "./dist/extension.js",
   "contributes": {
@@ -34,8 +37,12 @@
         "viewType": "linkerScriptStudio.editor",
         "displayName": "Linker Script Studio",
         "selector": [
-          { "filenamePattern": "*.ld" },
-          { "filenamePattern": "*.lds" }
+          {
+            "filenamePattern": "*.ld"
+          },
+          {
+            "filenamePattern": "*.lds"
+          }
         ],
         "priority": "default"
       }
@@ -45,26 +52,23 @@
       "properties": {
         "linkerScript.additionalExtensions": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Additional file extensions (e.g. \".ldS\", \".ld.S\") or exact filenames (e.g. \"lscript\") that should open in Linker Script Studio."
-        },
-        "linkerScript.defaultView": {
-          "type": "string",
-          "enum": ["studio", "text"],
-          "default": "studio",
-          "description": "Which view (Studio or Text) to show by default when opening a linker script."
         }
       }
     },
     "commands": [
       {
-        "command": "linkerScriptStudio.toggleView",
-        "title": "Linker Script Studio: Toggle Studio/Text View"
-      },
-      {
         "command": "linkerScriptStudio.openAsText",
         "title": "Reopen With Text Editor",
+        "category": "Linker Script Studio"
+      },
+      {
+        "command": "linkerScriptStudio.openAsStudio",
+        "title": "Reopen With Linker Script Studio",
         "category": "Linker Script Studio"
       }
     ]
@@ -93,5 +97,8 @@
     "mocha": "^10.6.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.5.3"
+  },
+  "dependencies": {
+    "@vscode/codicons": "^0.0.46-24"
   }
 }

@@ -14,15 +14,20 @@ import {
   deleteOutputSection,
   addSharedMemoryRegion,
 } from "./core/edits";
-import { HostMessage, ViewMode, WebviewMessage } from "./shared/messages";
+import { HostMessage, WebviewMessage } from "./shared/messages";
 
 interface Session {
   document: vscode.TextDocument;
   panel: vscode.WebviewPanel;
-  view: ViewMode;
 }
 
-/** Custom text editor for .ld/.lds files: renders a Studio (structured) view and a Text view, both backed by the same vscode.TextDocument so save/undo/dirty state work exactly like a normal editor. */
+/**
+ * Custom text editor for .ld/.lds files: a Studio (structured) view backed
+ * by vscode.TextDocument, so save/undo/dirty state work exactly like a
+ * normal editor. There's no separate in-webview "Text" render mode --
+ * `openAsText` reopens the same document with VS Code's own default text
+ * editor instead (see shared/messages.ts for why).
+ */
 export class LinkerScriptEditorProvider implements vscode.CustomTextEditorProvider {
   public static readonly viewType = "linkerScriptStudio.editor";
   private static readonly sessions = new Set<Session>();
@@ -34,12 +39,11 @@ export class LinkerScriptEditorProvider implements vscode.CustomTextEditorProvid
     });
   }
 
-  /** Toggles the Studio/Text view of whichever managed panel is currently active/focused, if any. */
-  static toggleActiveView(): void {
+  /** Reopens the document behind whichever managed Studio panel is currently active, with VS Code's default text editor. No-op if no Studio panel is active. */
+  static async openActiveAsText(): Promise<void> {
     for (const session of LinkerScriptEditorProvider.sessions) {
       if (session.panel.active) {
-        session.view = session.view === "studio" ? "text" : "studio";
-        postMessage(session.panel, { type: "setView", view: session.view });
+        await vscode.commands.executeCommand("vscode.openWith", session.document.uri, "default", session.panel.viewColumn);
         return;
       }
     }
@@ -48,17 +52,12 @@ export class LinkerScriptEditorProvider implements vscode.CustomTextEditorProvid
   constructor(private readonly context: vscode.ExtensionContext) {}
 
   async resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel): Promise<void> {
-    const config = vscode.workspace.getConfiguration("linkerScript", document.uri);
-    const session: Session = {
-      document,
-      panel,
-      view: config.get<ViewMode>("defaultView", "studio"),
-    };
+    const session: Session = { document, panel };
     LinkerScriptEditorProvider.sessions.add(session);
 
     panel.webview.options = {
       enableScripts: true,
-      localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "dist")],
+      localResourceRoots: [this.context.extensionUri],
     };
     panel.webview.html = getHtml(panel.webview, this.context.extensionUri);
 
@@ -80,7 +79,7 @@ export class LinkerScriptEditorProvider implements vscode.CustomTextEditorProvid
 
     panel.webview.onDidReceiveMessage(async (message: WebviewMessage) => {
       try {
-        await this.handleMessage(document, message);
+        await this.handleMessage(session, message);
       } catch (e) {
         const msg = e instanceof EditError ? e.message : e instanceof Error ? e.message : String(e);
         postMessage(panel, { type: "editError", message: msg });
@@ -92,21 +91,16 @@ export class LinkerScriptEditorProvider implements vscode.CustomTextEditorProvid
       LinkerScriptEditorProvider.sessions.delete(session);
     });
 
-    postMessage(panel, { type: "setView", view: session.view });
     postUpdate();
   }
 
-  private async handleMessage(document: vscode.TextDocument, message: WebviewMessage): Promise<void> {
+  private async handleMessage(session: Session, message: WebviewMessage): Promise<void> {
+    const document = session.document;
     switch (message.type) {
       case "ready":
         return;
-      case "setText":
-        await replaceWholeDocument(document, message.text);
-        return;
-      case "setView":
-        for (const s of LinkerScriptEditorProvider.sessions) {
-          if (s.document.uri.toString() === document.uri.toString()) s.view = message.view;
-        }
+      case "openAsText":
+        await vscode.commands.executeCommand("vscode.openWith", document.uri, "default", session.panel.viewColumn);
         return;
       case "addMemoryRegion":
         await applyCoreEdits(document, (script) => addMemoryRegion(script, message.region));
@@ -172,12 +166,14 @@ function postMessage(panel: vscode.WebviewPanel, message: HostMessage): void {
 function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "dist", "webview", "main.js"));
   const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "main.css"));
+  const codiconUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "codicon", "codicon.css"));
   const nonce = getNonce();
   return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';" />
+  <link rel="stylesheet" href="${codiconUri}" />
   <link rel="stylesheet" href="${styleUri}" />
   <title>Linker Script Studio</title>
 </head>
@@ -194,4 +190,3 @@ function getNonce(): string {
   for (let i = 0; i < 32; i++) text += possible.charAt(Math.floor(Math.random() * possible.length));
   return text;
 }
-

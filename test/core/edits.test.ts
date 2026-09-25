@@ -126,6 +126,70 @@ describe("edits: SECTIONS", () => {
   });
 });
 
+describe("edits: span-end must not absorb trailing whitespace (regression)", () => {
+  // Reproduces a real corruption found in examples/xilinx.ld: reassigning
+  // .text's region merged its closing line into the next, UNEDITED
+  // section's opening line, deleting the blank line between them, because
+  // parseOutputSection computed its span's end as the START of the next
+  // token (swallowing the blank-line trivia before it) instead of the end
+  // of its own last token. Mirrors that file's exact shape: no semicolon
+  // after the placement clause, a blank line before the next section.
+  const XILINX_SHAPED = `SECTIONS
+{
+.text : {
+   KEEP (*(.vectors))
+   *(.text)
+} > psu_ddr_0_memory_0
+
+.note.gnu.build-id : {
+   KEEP (*(.note.gnu.build-id))
+} > psu_ddr_0_memory_0
+}
+`;
+
+  it("updating a section's region leaves the blank line before the next section intact", () => {
+    const { script } = reparse(XILINX_SHAPED);
+    const textSection = script.sections!.sections.find((s) => s.name === ".text")!;
+    const edits = updateOutputSection(script, ".text", {
+      name: textSection.name,
+      body: textSection.body,
+      vmaRegion: "psu_ddr_1_memory_1",
+    });
+    const next = applyTextEdits(XILINX_SHAPED, edits);
+
+    assert.ok(!next.includes("memory_1;.note"), `sections must not merge onto one line:\n${next}`);
+    assert.ok(next.includes("\n\n.note.gnu.build-id"), `blank line before the untouched section must survive:\n${next}`);
+
+    const { script: reparsed, diagnostics } = reparse(next);
+    assert.deepStrictEqual(diagnostics, []);
+    assert.strictEqual(reparsed.sections!.sections.length, 2);
+    assert.strictEqual(reparsed.sections!.sections[1].name, ".note.gnu.build-id");
+    assert.strictEqual(reparsed.sections!.sections[1].placement.vmaRegion, "psu_ddr_0_memory_0");
+  });
+
+  it("updating a memory region leaves the blank line before the next region intact", () => {
+    const src = `MEMORY
+{
+rom : ORIGIN = 0x0, LENGTH = 0x1000
+
+ram : ORIGIN = 0x2000, LENGTH = 0x1000
+}
+`;
+    const { script } = reparse(src);
+    const edits = updateMemoryRegion(script, "rom", { length: "0x2000" });
+    const next = applyTextEdits(src, edits);
+
+    assert.ok(!next.includes("0x2000}ram") && !next.includes("0x2000ram"), `regions must not merge onto one line:\n${next}`);
+    assert.ok(next.includes("\n\nram"), `blank line before the untouched region must survive:\n${next}`);
+
+    const { script: reparsed, diagnostics } = reparse(next);
+    assert.deepStrictEqual(diagnostics, []);
+    assert.strictEqual(reparsed.memory!.regions.length, 2);
+    assert.strictEqual(reparsed.memory!.regions[1].name, "ram");
+    assert.strictEqual(reparsed.memory!.regions[1].origin.value, 0x2000);
+  });
+});
+
 describe("edits: shared memory preset", () => {
   it("adds a region plus a paired NOLOAD reserved section", () => {
     const { script } = reparse(SRC);

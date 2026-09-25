@@ -2,12 +2,18 @@
  * Typed postMessage protocol between the extension host and the Studio
  * webview. Pure data shapes only -- no vscode or DOM imports -- so this
  * file can be included from both tsconfig.host.json and tsconfig.webview.json.
+ *
+ * There is only one in-webview view (Studio). "Text" is not a second
+ * render mode of this webview -- clicking it asks the host to reopen the
+ * same document with VS Code's own default text editor (a different editor
+ * type for the same vscode.TextDocument), so it gets real syntax
+ * highlighting, line numbers, find/replace, undo/redo, everything native.
+ * Edits made there flow back into Studio the normal way (onDidChangeTextDocument),
+ * since both views share the same underlying document.
  */
 import { Diagnostic, LinkerScript } from "../core/model";
 import { MemoryRegionInput, OutputSectionInput } from "../core/serializer";
 import { SharedMemoryRegionPreset } from "../core/edits";
-
-export type ViewMode = "studio" | "text";
 
 export interface HostUpdateMessage {
   type: "update";
@@ -16,30 +22,19 @@ export interface HostUpdateMessage {
   diagnostics: Diagnostic[];
 }
 
-export interface HostSetViewMessage {
-  type: "setView";
-  view: ViewMode;
-}
-
 export interface HostEditErrorMessage {
   type: "editError";
   message: string;
 }
 
-export type HostMessage = HostUpdateMessage | HostSetViewMessage | HostEditErrorMessage;
+export type HostMessage = HostUpdateMessage | HostEditErrorMessage;
 
 export interface WebviewReadyMessage {
   type: "ready";
 }
 
-export interface WebviewSetTextMessage {
-  type: "setText";
-  text: string;
-}
-
-export interface WebviewSetViewMessage {
-  type: "setView";
-  view: ViewMode;
+export interface WebviewOpenAsTextMessage {
+  type: "openAsText";
 }
 
 export interface WebviewAddMemoryRegionMessage {
@@ -81,8 +76,7 @@ export interface WebviewAddSharedMemoryRegionMessage {
 
 export type WebviewMessage =
   | WebviewReadyMessage
-  | WebviewSetTextMessage
-  | WebviewSetViewMessage
+  | WebviewOpenAsTextMessage
   | WebviewAddMemoryRegionMessage
   | WebviewUpdateMemoryRegionMessage
   | WebviewDeleteMemoryRegionMessage
