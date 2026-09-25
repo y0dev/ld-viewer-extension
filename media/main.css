@@ -226,6 +226,45 @@ table {
   font-size: 13px;
 }
 
+/* Fixed layout + explicit column widths: with the default auto layout, the
+   Size column's content (a 140px hex-input plus a size-hint span) could
+   force that column wider than its fair share, squeezing/overlapping the
+   End column next to it. Fixed widths guarantee every column gets a slot
+   that content can never bleed out of. */
+.memory-table {
+  table-layout: fixed;
+}
+
+.memory-table th:nth-child(1),
+.memory-table td:nth-child(1) {
+  width: 16%; /* Name */
+}
+
+.memory-table th:nth-child(2),
+.memory-table td:nth-child(2) {
+  width: 9%; /* Attrs */
+}
+
+.memory-table th:nth-child(3),
+.memory-table td:nth-child(3) {
+  width: 20%; /* Base Address */
+}
+
+.memory-table th:nth-child(4),
+.memory-table td:nth-child(4) {
+  width: 26%; /* Size */
+}
+
+.memory-table th:nth-child(5),
+.memory-table td:nth-child(5) {
+  width: 18%; /* End */
+}
+
+.memory-table th:nth-child(6),
+.memory-table td:nth-child(6) {
+  width: 11%; /* Actions */
+}
+
 th {
   text-align: left;
   padding: 4px 10px 6px 4px;
@@ -258,15 +297,23 @@ tbody tr:hover td {
 
 .end-cell {
   opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .size-cell {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0; /* lets children (esp. size-hint) shrink/truncate instead of overflowing the fixed-width column */
 }
 
 .size-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11.5px;
   color: var(--vscode-descriptionForeground, var(--vscode-foreground));

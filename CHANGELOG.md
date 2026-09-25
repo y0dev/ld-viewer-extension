@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.2.1 - 2026-09-25
+
+### Fixed
+
+- **Memory table column overlap.** The Size column's fixed-width input plus
+  its size-hint text could force that column wider than its fair share
+  under the default (auto) table layout, squeezing/overlapping the End
+  column next to it. `.memory-table` now uses `table-layout: fixed` with
+  explicit per-column widths, so no column can ever bleed into its
+  neighbor; the size hint truncates with an ellipsis (full text on hover
+  via `title`) instead of forcing overflow.
+- **PolarFire SoC stack/heap detection was silently broken for the real
+  multi-hart case.** Two bugs, found by finally running detection against
+  `examples/mpfs-ddr-loaded-by-boot-loader.ld` instead of only the
+  single-hart fixture:
+  - `detectStackHeap` only ever looked at the *first* `. += ` statement in
+    a `.stack`/`.heap` section body. PolarFire SoC's real multi-hart
+    scripts define a separate stack per hart (E51 monitor core + up to
+    four U54 application cores) as five separate `. += STACK_SIZE_xxx;`
+    statements in one shared `.stack` section -- only the first
+    (`STACK_SIZE_E51_APPLICATION`) was ever detected or editable. Now
+    walks every increment in the section and returns one field per hart
+    (`stack`/`heap` are arrays now, not single objects -- see
+    `StackHeapField[]`). This turned out to affect Xilinx too: its AArch64
+    template reserves one stack per ARM exception level (EL3/EL2/EL1/EL0),
+    four increments in one section, same bug.
+  - The local `parseNumeric` helper only understood bare hex/decimal, not
+    the `0k`/`8k`/`1M` size-suffix literals PolarFire SoC's real script
+    actually uses (`HEAP_SIZE = 8k;`) -- so even the one field that *was*
+    detected had `currentValueNumeric: undefined`, which is why no visual
+    bar rendered at all for that file. Replaced with the same
+    `evalSimpleArithmetic` the core MEMORY parser already uses for
+    ORIGIN/LENGTH, instead of a second, less capable implementation.
+  - Added a test against the real unmodified example file asserting all
+    five hart stacks are detected and independently editable.
+  - The Stack & Heap bar now cycles through the same color palette as the
+    memory-region bar instead of two hardcoded colors, so it scales to
+    however many fields a script actually has.
+
 ## 0.2.0 - 2026-09-25
 
 ### Added

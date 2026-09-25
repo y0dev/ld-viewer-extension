@@ -483,7 +483,11 @@ function renderMemoryRow(r: MemoryRegion): HTMLElement {
   lengthInput.onchange = commit;
   const lengthCell = el("td", "size-cell");
   lengthCell.append(lengthInput);
-  if (r.length.value !== undefined) lengthCell.append(el("span", "size-hint", formatSize(r.length.value)));
+  if (r.length.value !== undefined) {
+    const hint = el("span", "size-hint", formatSize(r.length.value));
+    hint.title = hint.textContent!;
+    lengthCell.append(hint);
+  }
   row.append(lengthCell);
 
   const endCell = el(
@@ -605,50 +609,49 @@ function renderStackHeapSection(model: LinkerScript): HTMLElement {
     el(
       "p",
       "section-subtitle",
-      "The stack and heap reservation sizes, however this script defines them: a top-level symbol with a DEFINED() override (Xilinx Vitis/SDK-style), or a size literal directly inside the .stack/.heap section body (SoftConsole/PolarFire SoC-style).",
+      "The stack and heap reservation sizes, however this script defines them: a top-level symbol with a DEFINED() override (Xilinx Vitis/SDK-style), or a size literal directly inside the .stack/.heap section body (SoftConsole/PolarFire SoC-style). Multiple stacks (per ARM exception level, per PolarFire SoC hart, etc.) each get their own field.",
     ),
   );
 
   const { stack, heap } = detectStackHeap(model);
 
-  if (stack.kind === "not-found" && heap.kind === "not-found") {
+  if (stack.length === 0 && heap.length === 0) {
     section.append(el("p", "muted", "No stack/heap size convention was detected in this script -- edit it via the Text view instead."));
     return section;
   }
 
-  if (stack.currentValueNumeric !== undefined || heap.currentValueNumeric !== undefined) {
-    section.append(renderStackHeapBar(stack, heap));
+  const allFields = [...heap, ...stack];
+  if (allFields.some((f) => f.currentValueNumeric !== undefined)) {
+    section.append(renderStackHeapBar(allFields));
   }
 
   const grid = el("div", "stack-heap-grid");
-  grid.append(renderStackHeapField("Stack Size", stack));
-  grid.append(renderStackHeapField("Heap Size", heap));
+  for (const f of heap) grid.append(renderStackHeapField(heap.length === 1 ? "Heap Size" : f.label, f));
+  for (const f of stack) grid.append(renderStackHeapField(stack.length === 1 ? "Stack Size" : f.label, f));
   section.append(grid);
 
   return section;
 }
 
-function renderStackHeapBar(stack: StackHeapField, heap: StackHeapField): HTMLElement {
+// Reuses the memory bar's per-segment color cycling so N stack/heap fields
+// (e.g. PolarFire SoC's five per-hart stacks) stay visually distinguishable
+// instead of running out of the two hardcoded colors a fixed stack-vs-heap
+// bar had room for.
+function renderStackHeapBar(fields: StackHeapField[]): HTMLElement {
   const bar = el("div", "stack-heap-bar");
-  const stackVal = stack.currentValueNumeric ?? 0;
-  const heapVal = heap.currentValueNumeric ?? 0;
-  const total = stackVal + heapVal;
+  const withValues = fields.filter((f) => (f.currentValueNumeric ?? 0) > 0);
+  const total = withValues.reduce((sum, f) => sum + f.currentValueNumeric!, 0);
   if (total <= 0) return bar;
 
-  if (heapVal > 0) {
+  let colorIndex = 0;
+  for (const f of withValues) {
     const seg = el("div", "stack-heap-segment");
-    seg.style.width = `${(heapVal / total) * 100}%`;
-    seg.style.background = "var(--vscode-charts-green, #89d185)";
-    seg.title = `Heap: ${formatSize(heapVal)}`;
-    seg.append(el("span", "memory-bar-label", `Heap · ${formatSize(heapVal)}`));
-    bar.append(seg);
-  }
-  if (stackVal > 0) {
-    const seg = el("div", "stack-heap-segment");
-    seg.style.width = `${(stackVal / total) * 100}%`;
-    seg.style.background = "var(--vscode-charts-orange, #d19a66)";
-    seg.title = `Stack: ${formatSize(stackVal)}`;
-    seg.append(el("span", "memory-bar-label", `Stack · ${formatSize(stackVal)}`));
+    const value = f.currentValueNumeric!;
+    seg.style.width = `${(value / total) * 100}%`;
+    seg.style.background = REGION_PALETTE[colorIndex % REGION_PALETTE.length];
+    colorIndex++;
+    seg.title = `${f.label}: ${formatSize(value)}`;
+    seg.append(el("span", "memory-bar-label", `${f.label} · ${formatSize(value)}`));
     bar.append(seg);
   }
   return bar;
@@ -657,11 +660,6 @@ function renderStackHeapBar(stack: StackHeapField, heap: StackHeapField): HTMLEl
 function renderStackHeapField(label: string, field: StackHeapField): HTMLElement {
   const wrap = el("div", "stack-heap-field");
   wrap.append(el("div", "stack-heap-label", label));
-
-  if (field.kind === "not-found") {
-    wrap.append(el("p", "muted", "Not detected."));
-    return wrap;
-  }
 
   const input = el("input", "cell-input hex-input mono") as HTMLInputElement;
   input.value = field.currentValueRaw;

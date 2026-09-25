@@ -31,9 +31,9 @@ custom editor:
   still available for anyone who wants the file in a genuinely separate
   native-editor tab instead.
 
-![Studio view: memory regions with a proportional address bar, a Stack & Heap section with its own bar, a section-to-region mapping table, and a collapsible section detail tree](docs/images/studio-view.png)
+![Studio view: memory regions with a proportional address bar, a Stack & Heap section showing all five of a PolarFire SoC script's per-hart stacks, a section-to-region mapping table, and a collapsible section detail tree](docs/images/studio-view.png)
 
-*Design mockup of the Studio view (built from the actual `media/main.css` design, rendered standalone against a real fixture's data) -- not yet a screenshot of the extension running inside VS Code, since that still needs an F5 smoke test to confirm. Design pulled from the sibling [binary-structure-inspector](https://marketplace.visualstudio.com/items?itemName=devdoesit.binary-structure-inspector) extension's own native-VS-Code styling.*
+*Design mockup of the Studio view (built from the actual `media/main.css` design, rendered standalone against real data) -- not yet a screenshot of the extension running inside VS Code, since that still needs an F5 smoke test to confirm. The memory regions/sections are from the `fixtures/softconsole/polarfire-e51.ld` fixture; the Stack & Heap section instead shows `examples/mpfs-ddr-loaded-by-boot-loader.ld`'s real multi-hart data (E51 + four U54 cores), since that's the case worth illustrating. Design pulled from the sibling [binary-structure-inspector](https://marketplace.visualstudio.com/items?itemName=devdoesit.binary-structure-inspector) extension's own native-VS-Code styling.*
 
 ## Architecture
 
