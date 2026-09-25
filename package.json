@@ -2,7 +2,7 @@
   "name": "linker-script-studio",
   "displayName": "Linker Script Studio",
   "description": "Structured, editable view for GNU ld linker scripts (.ld/.lds), with a raw text view always available.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "devdoesit",
   "license": "MIT",
   "icon": "media/icon.png",

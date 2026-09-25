@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.2 - 2026-09-25
+
+### Added
+
+- `docs/images/studio-view.png` in the README, showing the Studio view's
+  intended layout (memory regions with the proportional address bar, the
+  section-to-region mapping table, and the collapsible section detail
+  tree). Rendered from the actual `media/main.css` design via a standalone
+  HTML page and a local headless browser (not a live capture of the
+  extension running in VS Code -- labeled as a design mockup in the README
+  pending an actual F5 smoke test), using real fixture data
+  (`polarfire-e51.ld`).
+- `docs/**` excluded from the packaged `.vsix` (`.vscodeignore`) -- `vsce`
+  rewrites the README's relative image path to the GitHub repo's raw URL
+  at package time (confirmed by inspecting the packaged `readme.md`), so
+  the image doesn't need to ship in the extension package itself.
+
 ## 0.1.1 - 2026-09-25
 
 ### Changed (design inspired by the sibling binary-structure-inspector extension)

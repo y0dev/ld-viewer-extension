@@ -22,6 +22,10 @@ custom editor:
   into the other automatically, and save/undo/dirty state work exactly like
   a normal text editor.
 
+![Studio view: memory regions with a proportional address bar, a section-to-region mapping table, and a collapsible section detail tree](docs/images/studio-view.png)
+
+*Design mockup of the Studio view (built from the actual `media/main.css` design, rendered standalone against a real fixture's data) -- not yet a screenshot of the extension running inside VS Code, since that still needs an F5 smoke test to confirm. Design pulled from the sibling [binary-structure-inspector](https://marketplace.visualstudio.com/items?itemName=devdoesit.binary-structure-inspector) extension's own native-VS-Code styling.*
+
 ## Architecture
 
 - `src/core/` -- pure parser/serializer/validator, **zero `vscode`/Node
