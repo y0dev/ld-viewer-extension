@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.2.0 - 2026-09-25
+
+### Added
+
+- **Stack & Heap section** (`src/core/stackHeap.ts`) in the Studio view,
+  between Available Memory Regions and Output Sections. Detects and edits
+  the stack/heap size however the script actually expresses it, uniformly:
+  - Xilinx Vitis/SDK: a top-level symbol with a `DEFINED()` override
+    (`_STACK_SIZE = DEFINED(_STACK_SIZE) ? _STACK_SIZE : 0x2000;`) --
+    editing writes only the default (the right side of `:`), preserving
+    the override wrapper.
+  - Microchip SoftConsole/PolarFire SoC: no named symbol, just a literal
+    directly in the `.stack`/`.heap` section body (`. += 0x2000;`) --
+    editing rewrites that one body statement via a new
+    `updateSectionBodyStatementValue`, without reprinting the rest of the
+    section.
+  - Verified against both real files in `examples/`, not just the fixtures.
+  - A small proportional bar visualizes stack size vs. heap size relative
+    to each other (not address-accurate placement, which isn't reliably
+    inferable from the script alone).
+- Explicit **Save** (button + Ctrl+S) with a dirty indicator, and
+  **Undo/Redo** (buttons + Ctrl+Z/Ctrl+Shift+Z) for Studio edits.
+
+### Changed
+
+- **Reworked the whole editing architecture to a local draft buffer.**
+  Studio edits used to apply straight to the real `vscode.TextDocument` on
+  every keystroke; now `src/core` (zero vscode/Node imports) is bundled
+  into the webview itself, which parses/edits/undoes entirely against its
+  own local `draftText`. The host becomes a thin sync layer -- it only
+  hears about the draft on an explicit Save, and only tells the webview
+  about the document on genuine external changes. The message protocol
+  (`shared/messages.ts`) shrank from ~10 message types to 2 (`update`,
+  `save`) as a direct result.
+- **Text view is a toggle again, not a new tab.** The previous release
+  changed "Open as Text" to reopen the document with VS Code's own default
+  text editor, on the theory that a real native editor beats a custom
+  textarea -- but in practice that opened a second tab for the same file,
+  which read as "opens a new file" rather than switching views. Reverted
+  to an in-panel Studio/Text toggle, backed by the same local draft buffer
+  as Studio (so switching never loses an edit either way); the native
+  editor swap survives as an explicit command-palette escape hatch
+  (`linkerScriptStudio.openAsText`/`openAsStudio`) for anyone who
+  specifically wants a separate tab.
+- Delete confirmations (a referenced memory region, an output section) now
+  use the webview's own `confirm()` instead of a native VS Code modal --
+  the host is no longer in the loop for individual edits, so it can't show
+  one; this is the one UX regression from the architecture change.
+
+### Fixed
+
+- The "+ Add section" button had no top margin (bare button with no
+  wrapper, unlike every other add-button which sits in a spaced
+  `.action-row`). Wrapped it the same way.
+- Size/address value fields (Base Address, Size in the memory table, Stack
+  Size, Heap Size) rendered at inconsistent widths -- the Size column's
+  input was narrower than Base Address's because it shared a flex row with
+  the size hint text, and the new Stack/Heap Size inputs didn't match
+  either. New shared `.hex-input` class (fixed 140px) applied to all of
+  them so they line up regardless of which container they're in. Left the
+  add-region-form's Origin/Length fields alone -- they need room for their
+  descriptive placeholders, a different UI pattern from a field showing an
+  existing value.
+
 ## 0.1.2 - 2026-09-25
 
 ### Added

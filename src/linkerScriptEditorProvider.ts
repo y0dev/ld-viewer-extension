@@ -1,19 +1,4 @@
 import * as vscode from "vscode";
-import { parseLinkerScript } from "./core/parser";
-import { validate } from "./core/validate";
-import { LinkerScript, TextEdit } from "./core/model";
-import { applyTextEdits } from "./core/serializer";
-import {
-  EditError,
-  addMemoryRegion,
-  deleteMemoryRegion,
-  findRegionReferences,
-  updateMemoryRegion,
-  addOutputSection,
-  updateOutputSection,
-  deleteOutputSection,
-  addSharedMemoryRegion,
-} from "./core/edits";
 import { HostMessage, WebviewMessage } from "./shared/messages";
 
 interface Session {
@@ -22,11 +7,12 @@ interface Session {
 }
 
 /**
- * Custom text editor for .ld/.lds files: a Studio (structured) view backed
- * by vscode.TextDocument, so save/undo/dirty state work exactly like a
- * normal editor. There's no separate in-webview "Text" render mode --
- * `openAsText` reopens the same document with VS Code's own default text
- * editor instead (see shared/messages.ts for why).
+ * Custom text editor for .ld/.lds files. All parsing/editing happens
+ * locally in the webview (it bundles src/core, which has zero vscode/Node
+ * imports) against its own draft buffer -- Studio/Text toggle, undo/redo,
+ * and dirty state are in-webview concerns. This provider is just a thin
+ * sync layer: it tells the webview when the document changes outside of it
+ * (postUpdate), and writes the webview's draft back on an explicit Save.
  */
 export class LinkerScriptEditorProvider implements vscode.CustomTextEditorProvider {
   public static readonly viewType = "linkerScriptStudio.editor";
@@ -39,7 +25,7 @@ export class LinkerScriptEditorProvider implements vscode.CustomTextEditorProvid
     });
   }
 
-  /** Reopens the document behind whichever managed Studio panel is currently active, with VS Code's default text editor. No-op if no Studio panel is active. */
+  /** Reopens the document behind whichever managed Studio panel is currently active, with VS Code's default text editor. Available as an explicit command for anyone who wants a real separate tab instead of the in-webview Text toggle. */
   static async openActiveAsText(): Promise<void> {
     for (const session of LinkerScriptEditorProvider.sessions) {
       if (session.panel.active) {
@@ -57,20 +43,15 @@ export class LinkerScriptEditorProvider implements vscode.CustomTextEditorProvid
 
     panel.webview.options = {
       enableScripts: true,
+      // Must cover every directory a webview resource is served from --
+      // "dist" for the bundle, "media" for the stylesheet and codicon font.
+      // Too narrow a root doesn't error, it silently blocks the resource.
       localResourceRoots: [this.context.extensionUri],
     };
     panel.webview.html = getHtml(panel.webview, this.context.extensionUri);
 
     const postUpdate = () => {
-      const text = document.getText();
-      const { script, diagnostics } = parseLinkerScript(text);
-      const allDiagnostics = script.needsPreprocessor ? diagnostics : [...diagnostics, ...validate(script)];
-      postMessage(panel, {
-        type: "update",
-        text,
-        model: script.needsPreprocessor ? null : script,
-        diagnostics: allDiagnostics,
-      });
+      postMessage(panel, { type: "update", text: document.getText() });
     };
 
     const changeSub = vscode.workspace.onDidChangeTextDocument((e) => {
@@ -78,11 +59,14 @@ export class LinkerScriptEditorProvider implements vscode.CustomTextEditorProvid
     });
 
     panel.webview.onDidReceiveMessage(async (message: WebviewMessage) => {
-      try {
-        await this.handleMessage(session, message);
-      } catch (e) {
-        const msg = e instanceof EditError ? e.message : e instanceof Error ? e.message : String(e);
-        postMessage(panel, { type: "editError", message: msg });
+      if (message.type === "ready") {
+        postUpdate();
+        return;
+      }
+      if (message.type === "save") {
+        await replaceWholeDocument(document, message.text);
+        await document.save();
+        return;
       }
     });
 
@@ -93,66 +77,10 @@ export class LinkerScriptEditorProvider implements vscode.CustomTextEditorProvid
 
     postUpdate();
   }
-
-  private async handleMessage(session: Session, message: WebviewMessage): Promise<void> {
-    const document = session.document;
-    switch (message.type) {
-      case "ready":
-        return;
-      case "openAsText":
-        await vscode.commands.executeCommand("vscode.openWith", document.uri, "default", session.panel.viewColumn);
-        return;
-      case "addMemoryRegion":
-        await applyCoreEdits(document, (script) => addMemoryRegion(script, message.region));
-        return;
-      case "updateMemoryRegion":
-        await applyCoreEdits(document, (script) => updateMemoryRegion(script, message.name, message.patch));
-        return;
-      case "deleteMemoryRegion": {
-        const { script } = parseLinkerScript(document.getText());
-        const refs = findRegionReferences(script, message.name);
-        if (refs.length > 0) {
-          const choice = await vscode.window.showWarningMessage(
-            `Memory region "${message.name}" is referenced by section(s) ${refs.join(", ")}. Delete it anyway?`,
-            { modal: true },
-            "Delete",
-          );
-          if (choice !== "Delete") return;
-        }
-        await applyCoreEdits(document, (s) => deleteMemoryRegion(s, message.name));
-        return;
-      }
-      case "addOutputSection":
-        await applyCoreEdits(document, (script) => addOutputSection(script, message.section));
-        return;
-      case "updateOutputSection":
-        await applyCoreEdits(document, (script) => updateOutputSection(script, message.name, message.section));
-        return;
-      case "addSharedMemoryRegion":
-        await applyCoreEdits(document, (script) => addSharedMemoryRegion(script, message.preset));
-        return;
-      case "deleteOutputSection": {
-        const choice = await vscode.window.showWarningMessage(`Delete output section "${message.name}"?`, { modal: true }, "Delete");
-        if (choice !== "Delete") return;
-        await applyCoreEdits(document, (s) => deleteOutputSection(s, message.name));
-        return;
-      }
-      default:
-        return;
-    }
-  }
-}
-
-async function applyCoreEdits(document: vscode.TextDocument, compute: (script: LinkerScript) => TextEdit[]): Promise<void> {
-  const text = document.getText();
-  const { script } = parseLinkerScript(text);
-  const edits = compute(script);
-  if (edits.length === 0) return;
-  const nextText = applyTextEdits(text, edits);
-  await replaceWholeDocument(document, nextText);
 }
 
 async function replaceWholeDocument(document: vscode.TextDocument, text: string): Promise<void> {
+  if (document.getText() === text) return;
   const edit = new vscode.WorkspaceEdit();
   const fullRange = new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length));
   edit.replace(document.uri, fullRange, text);

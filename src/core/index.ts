@@ -5,3 +5,4 @@ export * from "./serializer";
 export * from "./edits";
 export * from "./validate";
 export * from "./expr";
+export * from "./stackHeap";

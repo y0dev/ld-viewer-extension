@@ -63,6 +63,66 @@ body {
   color: var(--vscode-descriptionForeground, var(--vscode-foreground));
 }
 
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.status-dirty {
+  color: var(--vscode-statusBarItem-warningForeground, var(--vscode-editorWarning-foreground, #cca700));
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.tab {
+  background: transparent;
+  border: none;
+  color: var(--vscode-foreground);
+  padding: 7px 14px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  font-size: 13px;
+  font-family: inherit;
+  opacity: 0.75;
+}
+
+.tab:hover:not(:disabled) {
+  opacity: 1;
+}
+
+.tab.active {
+  border-bottom-color: var(--vscode-focusBorder);
+  font-weight: 600;
+  opacity: 1;
+}
+
+.tab:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.text-view textarea {
+  width: 100%;
+  min-height: 65vh;
+  box-sizing: border-box;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--vscode-editor-font-size, 13px);
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 3px;
+  padding: 10px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
 .notice {
   background: var(--vscode-inputValidation-warningBackground);
   border: 1px solid var(--vscode-inputValidation-warningBorder);
@@ -206,15 +266,21 @@ tbody tr:hover td {
   gap: 8px;
 }
 
-.size-cell .cell-input {
-  flex: 1;
-  min-width: 90px;
-}
-
 .size-hint {
   white-space: nowrap;
   font-size: 11.5px;
   color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+/* Every field that holds a hex address/size value (Base Address, Size,
+   Origin/Length in the add-forms, Stack/Heap Size) shares this fixed
+   width, so they line up instead of each stretching to fit whatever
+   container happens to hold it (a table cell, a flex row next to a size
+   hint, a bare form row). Name/Attrs/section-name fields stay flexible --
+   they hold variable-length identifiers, not fixed-format hex numbers. */
+.hex-input {
+  width: 140px;
+  flex: none;
 }
 
 /* Icon + label buttons (codicon), for inline row/toolbar actions -- e.g. Delete, Open as Text. */
@@ -465,6 +531,44 @@ table.mapping-table {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 12px;
   line-height: 1.7;
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+.stack-heap-bar {
+  display: flex;
+  height: 30px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+
+.stack-heap-segment {
+  display: flex;
+  align-items: center;
+  min-width: 4px;
+  overflow: hidden;
+}
+
+.stack-heap-grid {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.stack-heap-field {
+  min-width: 200px;
+}
+
+.stack-heap-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.stack-heap-meta {
+  margin: 6px 0 0;
+  font-size: 11.5px;
   color: var(--vscode-descriptionForeground, var(--vscode-foreground));
 }
 

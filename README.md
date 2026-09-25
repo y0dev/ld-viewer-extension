@@ -4,25 +4,34 @@ A VS Code extension that opens GNU `ld` linker scripts (`.ld`, `.lds`) as a
 custom editor:
 
 - **Studio**: memory regions as an always-editable table with a proportional
-  address-space bar, a "Section to Memory Region Mapping" table (each output
-  section next to a dropdown of available regions, reassignable in one
-  click), and an output-section tree with the full detail (input-section
-  patterns, placement, symbols). Entry point, `OUTPUT_FORMAT`/`OUTPUT_ARCH`,
-  and `INCLUDE`d files are summarized at the top. Add/edit/delete memory
-  regions and output sections here, including a "+ Add shared memory" preset
-  that adds a region plus a paired `(NOLOAD)` reserved section for a
-  cross-core shared buffer.
-- **Text**: not a second render mode of the webview -- the "Open as Text"
-  button reopens the exact same document with VS Code's own default text
-  editor (`linkerScriptStudio.openAsText` command; `linkerScriptStudio.openAsStudio`
-  goes back). That gives real syntax highlighting, line numbers, find/
-  replace, and undo/redo, for anything Studio can't yet represent, instead
-  of a custom textarea trying to imitate an editor. Both editor types are
-  backed by the same `vscode.TextDocument`, so edits made in either flow
-  into the other automatically, and save/undo/dirty state work exactly like
-  a normal text editor.
+  address-space bar, a **Stack & Heap** section that edits the size however
+  the script actually expresses it (a top-level symbol with a `DEFINED()`
+  override on Xilinx Vitis/SDK, or a literal directly in the `.stack`/
+  `.heap` section body on Microchip SoftConsole/PolarFire SoC -- detected
+  automatically, with a small proportional bar), a "Section to Memory
+  Region Mapping" table (each output section next to a dropdown of
+  available regions, reassignable in one click), and an output-section
+  tree with the full detail (input-section patterns, placement, symbols).
+  Entry point, `OUTPUT_FORMAT`/`OUTPUT_ARCH`, and `INCLUDE`d files are
+  summarized at the top. Add/edit/delete memory regions and output sections
+  here, including a "+ Add shared memory" preset that adds a region plus a
+  paired `(NOLOAD)` reserved section for a cross-core shared buffer.
+- **Text**: a toggle within the same panel (not a second tab/file) showing
+  the raw source, for anything Studio can't yet represent. Both views read
+  from and write to the same local draft buffer, so switching back and
+  forth never loses an edit either way.
+- **Explicit Save, with undo/redo**: Studio edits build up in a local draft
+  buffer, not applied to the real file on every keystroke -- nothing is
+  written to the document (or disk) until you hit **Save** (button, or
+  Ctrl+S) or the status bar's "Unsaved changes" indicator. Undo/Redo
+  buttons (and Ctrl+Z/Ctrl+Shift+Z) step back and forth through Studio
+  edits one at a time; the Text view's textarea additionally gets the
+  browser's native per-keystroke undo while it's focused. A command palette
+  escape hatch (`linkerScriptStudio.openAsText` / `...openAsStudio`) is
+  still available for anyone who wants the file in a genuinely separate
+  native-editor tab instead.
 
-![Studio view: memory regions with a proportional address bar, a section-to-region mapping table, and a collapsible section detail tree](docs/images/studio-view.png)
+![Studio view: memory regions with a proportional address bar, a Stack & Heap section with its own bar, a section-to-region mapping table, and a collapsible section detail tree](docs/images/studio-view.png)
 
 *Design mockup of the Studio view (built from the actual `media/main.css` design, rendered standalone against a real fixture's data) -- not yet a screenshot of the extension running inside VS Code, since that still needs an F5 smoke test to confirm. Design pulled from the sibling [binary-structure-inspector](https://marketplace.visualstudio.com/items?itemName=devdoesit.binary-structure-inspector) extension's own native-VS-Code styling.*
 
@@ -43,19 +52,22 @@ custom editor:
     string. **No code from a linker script is ever executed.**
 - `src/extension.ts`, `src/linkerScriptEditorProvider.ts` -- the extension
   host (`vscode` imports allowed). Registers the `linkerScriptStudio.editor`
-  custom text editor and applies Studio-view edits via
-  `vscode.workspace.applyEdit`.
-- `src/webview/` -- the Studio view's UI (vanilla DOM, no framework),
-  talking to the host only through the typed `postMessage` protocol in
-  `src/shared/messages.ts`. Styled with `media/main.css` against VS Code's
-  own theme variables (`--vscode-*`) rather than fixed colors, and uses
-  `@vscode/codicons` (`media/codicon/`) for icon buttons so actions look
-  native rather than like generic HTML form controls. The webview's
-  `localResourceRoots` must cover every directory a resource is served
-  from (`dist` for the bundle, `media` for the stylesheet and codicon
-  font) -- too narrow a root doesn't error, it silently blocks the
-  resource, so double-check this after adding a new webview asset
-  directory.
+  custom text editor. It's a thin sync layer, not an editing layer: it
+  tells the webview when the document changes outside of it, and writes
+  the webview's draft back to the document (and disk) on an explicit Save
+  -- see `shared/messages.ts` for why.
+- `src/webview/` -- the Studio view's UI (vanilla DOM, no framework).
+  Bundles `src/core` directly (it has zero vscode/Node imports, so it's
+  safe in a browser context) and does all parsing/editing locally against
+  its own draft text buffer; the host only hears about it on Save. Styled
+  with `media/main.css` against VS Code's own theme variables (`--vscode-*`)
+  rather than fixed colors, and uses `@vscode/codicons` (`media/codicon/`)
+  for icon buttons so actions look native rather than like generic HTML
+  form controls. The webview's `localResourceRoots` must cover every
+  directory a resource is served from (`dist` for the bundle, `media` for
+  the stylesheet and codicon font) -- too narrow a root doesn't error, it
+  silently blocks the resource, so double-check this after adding a new
+  webview asset directory.
 - Two esbuild bundles: `dist/extension.js` (`platform: node`) and
   `dist/webview/main.js` (`platform: browser`), matching build targets to
   what's actually available in each context.
@@ -73,9 +85,8 @@ regions/sections, indentation elsewhere in the file) survives byte-for-byte.
 The explicit tradeoff: a node that **is** edited has its entire span
 replaced by canonical pretty-printed text, so that node's own internal
 comments/formatting are not preserved, and a newly added region/section is
-appended with no comment. Opening the file as text (VS Code's native editor,
-same document) is the escape hatch either way -- nothing is only editable
-through the lossy path.
+appended with no comment. The Text view is the escape hatch either way --
+nothing is only editable through the lossy path.
 
 ## Scope
 
@@ -88,8 +99,8 @@ than crashing or silently corrupting the file.
 **Explicitly out of scope (first pass):** scripts that require the C
 preprocessor before they're valid ld syntax (`#include`/`#define`/`#if` at
 BSP-generated files sometimes do this). These are detected up front
-(`detectNeedsPreprocessor`); the Studio view shows a notice and the file is
-still editable via "Open as Text", rather than producing a broken parse.
+(`detectNeedsPreprocessor`); the Studio view shows a notice and falls back
+to the Text view, rather than producing a broken parse.
 
 ## Development
 

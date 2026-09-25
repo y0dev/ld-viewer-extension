@@ -21,6 +21,34 @@ function findSection(script: LinkerScript, name: string): OutputSection {
   return section;
 }
 
+/** Replaces one top-level assignment's value (e.g. "_STACK_SIZE = ...;"), keeping its name/operator/PROVIDE wrapper. */
+export function updateTopLevelAssignment(script: LinkerScript, name: string, newValueRaw: string): TextEdit[] {
+  const assignment = script.topLevelAssignments.find((a) => a.name === name);
+  if (!assignment) throw new EditError(`No top-level assignment named "${name}".`);
+  const lhs =
+    assignment.provide === "provide"
+      ? `PROVIDE(${name} = ${newValueRaw})`
+      : assignment.provide === "provide-hidden"
+        ? `PROVIDE_HIDDEN(${name} = ${newValueRaw})`
+        : `${name} ${assignment.operator} ${newValueRaw}`;
+  return [{ span: assignment.span, newText: `${lhs};` }];
+}
+
+/** Replaces one section body statement's value in place (e.g. the ". += 0x2000;" line inside a .stack section), without reprinting the rest of the section. Only symbol-assignment statements are supported since that's the only kind with an editable value. */
+export function updateSectionBodyStatementValue(script: LinkerScript, sectionName: string, statementIndex: number, newValueRaw: string): TextEdit[] {
+  const section = findSection(script, sectionName);
+  const stmt = section.body[statementIndex];
+  if (!stmt) throw new EditError(`Section "${sectionName}" has no body statement at index ${statementIndex}.`);
+  if (stmt.kind !== "symbol-assignment") throw new EditError(`Body statement ${statementIndex} in "${sectionName}" is not an assignment.`);
+  const lhs =
+    stmt.provide === "provide"
+      ? `PROVIDE(${stmt.name} = ${newValueRaw})`
+      : stmt.provide === "provide-hidden"
+        ? `PROVIDE_HIDDEN(${stmt.name} = ${newValueRaw})`
+        : `${stmt.name} ${stmt.operator} ${newValueRaw}`;
+  return [{ span: stmt.span, newText: `${lhs};` }];
+}
+
 export function addMemoryRegion(script: LinkerScript, region: MemoryRegionInput): TextEdit[] {
   if (!script.memory) throw new EditError("This script has no MEMORY block to add a region to.");
   if (script.memory.regions.some((r) => r.name === region.name)) {

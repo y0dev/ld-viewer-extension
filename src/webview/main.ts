@@ -1,10 +1,29 @@
 /**
  * Studio webview UI. Vanilla DOM (no framework) to keep the bundle small.
- * No vscode/Node imports -- everything here talks to the extension host
- * only through the typed postMessage protocol in src/shared/messages.ts.
+ *
+ * Editing is entirely local: src/core has zero vscode/Node imports, so it's
+ * bundled straight into this webview and used to parse/edit/serialize a
+ * local `draftText` buffer. The host is only told about it on an explicit
+ * Save (see shared/messages.ts) -- nothing here auto-applies to the real
+ * vscode.TextDocument on every keystroke. Undo/redo is a stack of prior
+ * draftText snapshots, separate from (and in addition to) the Text view's
+ * native browser textarea undo while it's focused.
  */
-import { Diagnostic, LinkerScript, MemoryRegion, OutputSection } from "../core/model";
-import { OutputSectionInput } from "../core/serializer";
+import { Diagnostic, LinkerScript, MemoryRegion, OutputSection, TextEdit } from "../core/model";
+import { OutputSectionInput, applyTextEdits } from "../core/serializer";
+import { parseLinkerScript } from "../core/parser";
+import { validate } from "../core/validate";
+import {
+  addMemoryRegion,
+  updateMemoryRegion,
+  deleteMemoryRegion,
+  findRegionReferences,
+  addOutputSection,
+  updateOutputSection,
+  deleteOutputSection,
+  addSharedMemoryRegion,
+} from "../core/edits";
+import { StackHeapField, detectStackHeap, updateStackHeapSize } from "../core/stackHeap";
 import { HostMessage, WebviewMessage } from "../shared/messages";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void; setState(s: unknown): void; getState(): unknown };
@@ -14,31 +33,128 @@ function post(message: WebviewMessage): void {
   vscode.postMessage(message);
 }
 
+type ViewMode = "studio" | "text";
+
 interface State {
+  /** What's currently persisted in the vscode.TextDocument (and disk, once a save round-trips back). */
+  lastSavedText: string;
+  /** The local, possibly-unsaved buffer everything renders from. */
+  draftText: string;
   model: LinkerScript | null;
   diagnostics: Diagnostic[];
+  view: ViewMode;
 }
 
-const state: State = { model: null, diagnostics: [] };
+const state: State = { lastSavedText: "", draftText: "", model: null, diagnostics: [], view: "studio" };
+let undoStack: string[] = [];
+let redoStack: string[] = [];
+let textareaFocused = false;
+let receivedFirstUpdate = false;
 
 // Which sections are expanded in the Section Detail tree. Lives outside
 // `state` since it isn't server data -- it's re-derived from the model on
-// each update, but must survive across those updates (a diagnostic-only
-// change shouldn't collapse everything the user just expanded).
+// each update, but must survive across those updates.
 const expandedSections = new Set<string>();
 
 const root = document.getElementById("root")!;
 
+function isDirty(): boolean {
+  return state.draftText !== state.lastSavedText;
+}
+
+function reparse(): void {
+  const { script, diagnostics } = parseLinkerScript(state.draftText);
+  const allDiagnostics = script.needsPreprocessor ? diagnostics : [...diagnostics, ...validate(script)];
+  state.model = script.needsPreprocessor ? null : script;
+  state.diagnostics = allDiagnostics;
+}
+
 window.addEventListener("message", (event: MessageEvent<HostMessage>) => {
   const msg = event.data;
-  if (msg.type === "update") {
-    state.model = msg.model;
-    state.diagnostics = msg.diagnostics;
+  if (msg.type !== "update") return;
+  const incoming = msg.text;
+
+  if (!receivedFirstUpdate) {
+    receivedFirstUpdate = true;
+    state.lastSavedText = incoming;
+    state.draftText = incoming;
+    reparse();
     render();
-  } else if (msg.type === "editError") {
-    showTransientError(msg.message);
+    return;
+  }
+
+  if (incoming === state.lastSavedText) return; // our own save echoing back, or a genuine no-op
+
+  state.lastSavedText = incoming;
+  if (!isDirty()) {
+    state.draftText = incoming;
+    undoStack = [];
+    redoStack = [];
+    reparse();
+    render();
+  } else {
+    showTransientError("This file changed on disk. Your unsaved Studio changes were kept -- Save to overwrite, or close and reopen the file to discard them.");
   }
 });
+
+function save(): void {
+  if (!isDirty()) return;
+  state.lastSavedText = state.draftText;
+  post({ type: "save", text: state.draftText });
+  render();
+}
+
+function undo(): void {
+  if (undoStack.length === 0) return;
+  redoStack.push(state.draftText);
+  state.draftText = undoStack.pop()!;
+  reparse();
+  render();
+}
+
+function redo(): void {
+  if (redoStack.length === 0) return;
+  undoStack.push(state.draftText);
+  state.draftText = redoStack.pop()!;
+  reparse();
+  render();
+}
+
+window.addEventListener("keydown", (e) => {
+  const mod = e.ctrlKey || e.metaKey;
+  if (!mod) return;
+  const key = e.key.toLowerCase();
+  if (key === "s") {
+    e.preventDefault();
+    save();
+    return;
+  }
+  if (textareaFocused) return; // let the browser handle native undo/redo inside the Text view
+  if (key === "z" && !e.shiftKey) {
+    e.preventDefault();
+    undo();
+  } else if ((key === "z" && e.shiftKey) || key === "y") {
+    e.preventDefault();
+    redo();
+  }
+});
+
+/** Applies a core edit function to the current model and commits the result as one undo checkpoint. Shows a transient error (from EditError or otherwise) instead of throwing. */
+function applyLocalEdit(compute: (script: LinkerScript) => TextEdit[]): void {
+  if (!state.model) return;
+  try {
+    const edits = compute(state.model);
+    if (edits.length === 0) return;
+    const nextText = applyTextEdits(state.draftText, edits);
+    undoStack.push(state.draftText);
+    redoStack = [];
+    state.draftText = nextText;
+    reparse();
+    render();
+  } catch (e) {
+    showTransientError(e instanceof Error ? e.message : String(e));
+  }
+}
 
 function showTransientError(message: string): void {
   const banner = el("div", "error-banner", message);
@@ -66,6 +182,10 @@ function iconButton(name: string, label: string, extraClass?: string): HTMLButto
 }
 
 function render(): void {
+  // While the Text view's textarea has focus, skip re-rendering entirely --
+  // render() rebuilds the DOM from scratch, which would otherwise blow away
+  // in-progress typing (and the browser's native undo history for it).
+  if (textareaFocused) return;
   root.replaceChildren();
 
   const page = el("div", "page");
@@ -81,21 +201,37 @@ function render(): void {
     ),
   );
   header.append(headerText);
-
-  const openAsTextBtn = iconButton("go-to-file", "Open as Text", "toolbar-btn");
-  openAsTextBtn.title = "Reopen this file with VS Code's default text editor";
-  openAsTextBtn.onclick = () => post({ type: "openAsText" });
-  header.append(openAsTextBtn);
+  header.append(renderToolbarActions());
   page.append(header);
+
+  const tabs = el("div", "tabs");
+  const studioTab = el("button", "tab" + (state.view === "studio" ? " active" : ""), "Studio");
+  const textTab = el("button", "tab" + (state.view === "text" ? " active" : ""), "Text");
+  studioTab.disabled = state.model === null;
+  studioTab.onclick = () => {
+    state.view = "studio";
+    render();
+  };
+  textTab.onclick = () => {
+    state.view = "text";
+    render();
+  };
+  tabs.append(studioTab, textTab);
+  page.append(tabs);
 
   if (state.model === null) {
     const notice = el("div", "notice", diagnosticsSummary(state.diagnostics) || "This file could not be parsed as a linker script.");
     page.append(notice);
+    page.append(renderTextView());
     root.append(page);
     return;
   }
 
-  page.append(renderStudioView(state.model));
+  if (state.view === "studio") {
+    page.append(renderStudioView(state.model));
+  } else {
+    page.append(renderTextView());
+  }
 
   if (state.diagnostics.length > 0) {
     page.append(renderDiagnostics(state.diagnostics));
@@ -105,21 +241,25 @@ function render(): void {
   root.append(renderStatusBar(state.model, state.diagnostics));
 }
 
-function renderStatusBar(model: LinkerScript, diagnostics: Diagnostic[]): HTMLElement {
-  const bar = el("div", "status-bar");
-  const regionCount = model.memory?.regions.length ?? 0;
-  const sectionCount = model.sections?.sections.length ?? 0;
-  const errorCount = diagnostics.filter((d) => d.severity === "error").length;
-  const warningCount = diagnostics.filter((d) => d.severity === "warning").length;
+function renderToolbarActions(): HTMLElement {
+  const toolbar = el("div", "toolbar-actions");
 
-  bar.append(el("span", undefined, `${regionCount} memory region${regionCount === 1 ? "" : "s"}`));
-  bar.append(el("span", undefined, `${sectionCount} section${sectionCount === 1 ? "" : "s"}`));
+  const undoBtn = iconButton("discard", "Undo", "toolbar-btn") as HTMLButtonElement;
+  undoBtn.disabled = undoStack.length === 0;
+  undoBtn.onclick = undo;
 
-  const statusText = errorCount > 0 ? `${errorCount} error${errorCount === 1 ? "" : "s"}` : warningCount > 0 ? `${warningCount} warning${warningCount === 1 ? "" : "s"}` : "no problems";
-  const statusSpan = el("span", errorCount > 0 ? "status-error" : warningCount > 0 ? "status-warning" : undefined, statusText);
-  bar.append(statusSpan);
+  const redoBtn = iconButton("redo", "Redo", "toolbar-btn") as HTMLButtonElement;
+  redoBtn.disabled = redoStack.length === 0;
+  redoBtn.onclick = redo;
 
-  return bar;
+  const dirty = isDirty();
+  const saveBtn = el("button", "action-btn" + (dirty ? " action-btn-primary" : ""), dirty ? "Save ●" : "Save") as HTMLButtonElement;
+  saveBtn.disabled = !dirty;
+  saveBtn.title = "Save (Ctrl+S)";
+  saveBtn.onclick = save;
+
+  toolbar.append(undoBtn, redoBtn, saveBtn);
+  return toolbar;
 }
 
 function diagnosticsSummary(diagnostics: Diagnostic[]): string {
@@ -140,10 +280,60 @@ function renderDiagnostics(diagnostics: Diagnostic[]): HTMLElement {
   return container;
 }
 
+function renderTextView(): HTMLElement {
+  const wrap = el("div", "text-view");
+  const textarea = el("textarea", "text-editor") as HTMLTextAreaElement;
+  textarea.value = state.draftText;
+  textarea.spellcheck = false;
+
+  let textBeforeFocus = state.draftText;
+  textarea.onfocus = () => {
+    textareaFocused = true;
+    textBeforeFocus = state.draftText;
+  };
+  textarea.oninput = () => {
+    // Keep the model/diagnostics in sync without touching the DOM (see the
+    // textareaFocused guard in render()), so Save and view-switching always
+    // see the latest text even mid-typing.
+    state.draftText = textarea.value;
+    reparse();
+  };
+  textarea.onblur = () => {
+    textareaFocused = false;
+    if (state.draftText !== textBeforeFocus) {
+      undoStack.push(textBeforeFocus);
+      redoStack = [];
+    }
+    render();
+  };
+  wrap.append(textarea);
+  return wrap;
+}
+
+function renderStatusBar(model: LinkerScript, diagnostics: Diagnostic[]): HTMLElement {
+  const bar = el("div", "status-bar");
+  const regionCount = model.memory?.regions.length ?? 0;
+  const sectionCount = model.sections?.sections.length ?? 0;
+  const errorCount = diagnostics.filter((d) => d.severity === "error").length;
+  const warningCount = diagnostics.filter((d) => d.severity === "warning").length;
+
+  bar.append(el("span", undefined, `${regionCount} memory region${regionCount === 1 ? "" : "s"}`));
+  bar.append(el("span", undefined, `${sectionCount} section${sectionCount === 1 ? "" : "s"}`));
+
+  const statusText = errorCount > 0 ? `${errorCount} error${errorCount === 1 ? "" : "s"}` : warningCount > 0 ? `${warningCount} warning${warningCount === 1 ? "" : "s"}` : "no problems";
+  const statusSpan = el("span", errorCount > 0 ? "status-error" : warningCount > 0 ? "status-warning" : undefined, statusText);
+  bar.append(statusSpan);
+
+  if (isDirty()) bar.append(el("span", "status-dirty", "Unsaved changes"));
+
+  return bar;
+}
+
 function renderStudioView(model: LinkerScript): HTMLElement {
   const wrap = el("div", "studio-view");
   wrap.append(renderSummary(model));
   wrap.append(renderMemorySection(model));
+  wrap.append(renderStackHeapSection(model));
   wrap.append(renderSectionsSection(model));
   return wrap;
 }
@@ -242,8 +432,8 @@ function renderMemorySection(model: LinkerScript): HTMLElement {
   section.append(table);
 
   const buttonRow = el("div", "action-row");
-  const addBtn = iconButton("add", "Add memory region", "action-btn-primary");
-  const addSharedBtn = iconButton("layers", "Add shared memory");
+  const addBtn = el("button", "action-btn action-btn-primary", "+ Add memory region");
+  const addSharedBtn = el("button", "action-btn", "+ Add shared memory");
   addBtn.onclick = () => {
     buttonRow.remove();
     section.append(renderMemoryAddForm(section, buttonRow));
@@ -258,7 +448,7 @@ function renderMemorySection(model: LinkerScript): HTMLElement {
   return section;
 }
 
-/** Reads all four fields live from the row's own inputs and sends the full row as the patch, keyed by the name the row was rendered with -- safe even if the name field itself was just edited (see main.ts module doc). */
+/** Reads all four fields live from the row's own inputs and commits the full row as one local edit, keyed by the name the row was rendered with -- safe even if the name field itself was just edited (see applyLocalEdit). */
 function renderMemoryRow(r: MemoryRegion): HTMLElement {
   const originalName = r.name;
   const row = el("tr", "editable-row");
@@ -268,17 +458,20 @@ function renderMemoryRow(r: MemoryRegion): HTMLElement {
   const attrsInput = el("input", "cell-input mono") as HTMLInputElement;
   attrsInput.value = r.attributes;
   attrsInput.placeholder = "rwx";
-  const originInput = el("input", "cell-input mono") as HTMLInputElement;
+  const originInput = el("input", "cell-input hex-input mono") as HTMLInputElement;
   originInput.value = r.origin.raw;
-  const lengthInput = el("input", "cell-input mono") as HTMLInputElement;
+  const lengthInput = el("input", "cell-input hex-input mono") as HTMLInputElement;
   lengthInput.value = r.length.raw;
 
   const commit = () => {
-    post({
-      type: "updateMemoryRegion",
-      name: originalName,
-      patch: { name: nameInput.value.trim(), attributes: attrsInput.value.trim(), origin: originInput.value.trim(), length: lengthInput.value.trim() },
-    });
+    applyLocalEdit((s) =>
+      updateMemoryRegion(s, originalName, {
+        name: nameInput.value.trim(),
+        attributes: attrsInput.value.trim(),
+        origin: originInput.value.trim(),
+        length: lengthInput.value.trim(),
+      }),
+    );
   };
   for (const input of [nameInput, attrsInput, originInput]) {
     input.onchange = commit;
@@ -302,7 +495,11 @@ function renderMemoryRow(r: MemoryRegion): HTMLElement {
 
   const actionsCell = el("td", "actions");
   const deleteBtn = iconButton("trash", "Delete", "danger");
-  deleteBtn.onclick = () => post({ type: "deleteMemoryRegion", name: originalName });
+  deleteBtn.onclick = () => {
+    const refs = state.model ? findRegionReferences(state.model, originalName) : [];
+    if (refs.length > 0 && !confirm(`Memory region "${originalName}" is referenced by section(s) ${refs.join(", ")}. Delete it anyway?`)) return;
+    applyLocalEdit((s) => deleteMemoryRegion(s, originalName));
+  };
   actionsCell.append(deleteBtn);
   row.append(actionsCell);
 
@@ -323,10 +520,14 @@ function renderMemoryAddForm(section: HTMLElement, buttonRow: HTMLElement): HTML
   const saveBtn = el("button", "action-btn action-btn-primary", "Add");
   saveBtn.onclick = () => {
     if (!nameInput.value.trim()) return;
-    post({
-      type: "addMemoryRegion",
-      region: { name: nameInput.value.trim(), attributes: attrsInput.value.trim(), origin: originInput.value.trim() || "0x0", length: lengthInput.value.trim() || "0x0" },
-    });
+    applyLocalEdit((s) =>
+      addMemoryRegion(s, {
+        name: nameInput.value.trim(),
+        attributes: attrsInput.value.trim(),
+        origin: originInput.value.trim() || "0x0",
+        length: lengthInput.value.trim() || "0x0",
+      }),
+    );
     form.remove();
     section.append(buttonRow);
   };
@@ -372,16 +573,15 @@ function renderSharedMemoryAddForm(section: HTMLElement, buttonRow: HTMLElement,
     if (!model.sections) {
       showTransientError("This script has no SECTIONS block, so only the memory region will be added (no reserved section).");
     }
-    post({
-      type: "addSharedMemoryRegion",
-      preset: {
+    applyLocalEdit((s) =>
+      addSharedMemoryRegion(s, {
         regionName,
         attributes: attrsInput.value.trim() || "rw",
         origin: originInput.value.trim() || "0x0",
         length: lengthInput.value.trim() || "0x1000",
         sectionName: sectionNameInput.value.trim() || undefined,
-      },
-    });
+      }),
+    );
     form.remove();
     section.append(buttonRow);
   };
@@ -396,6 +596,85 @@ function renderSharedMemoryAddForm(section: HTMLElement, buttonRow: HTMLElement,
 
   form.append(help, fieldsRow, actionsRow);
   return form;
+}
+
+function renderStackHeapSection(model: LinkerScript): HTMLElement {
+  const section = el("div", "section");
+  section.append(el("h2", "section-title", "Stack & Heap"));
+  section.append(
+    el(
+      "p",
+      "section-subtitle",
+      "The stack and heap reservation sizes, however this script defines them: a top-level symbol with a DEFINED() override (Xilinx Vitis/SDK-style), or a size literal directly inside the .stack/.heap section body (SoftConsole/PolarFire SoC-style).",
+    ),
+  );
+
+  const { stack, heap } = detectStackHeap(model);
+
+  if (stack.kind === "not-found" && heap.kind === "not-found") {
+    section.append(el("p", "muted", "No stack/heap size convention was detected in this script -- edit it via the Text view instead."));
+    return section;
+  }
+
+  if (stack.currentValueNumeric !== undefined || heap.currentValueNumeric !== undefined) {
+    section.append(renderStackHeapBar(stack, heap));
+  }
+
+  const grid = el("div", "stack-heap-grid");
+  grid.append(renderStackHeapField("Stack Size", stack));
+  grid.append(renderStackHeapField("Heap Size", heap));
+  section.append(grid);
+
+  return section;
+}
+
+function renderStackHeapBar(stack: StackHeapField, heap: StackHeapField): HTMLElement {
+  const bar = el("div", "stack-heap-bar");
+  const stackVal = stack.currentValueNumeric ?? 0;
+  const heapVal = heap.currentValueNumeric ?? 0;
+  const total = stackVal + heapVal;
+  if (total <= 0) return bar;
+
+  if (heapVal > 0) {
+    const seg = el("div", "stack-heap-segment");
+    seg.style.width = `${(heapVal / total) * 100}%`;
+    seg.style.background = "var(--vscode-charts-green, #89d185)";
+    seg.title = `Heap: ${formatSize(heapVal)}`;
+    seg.append(el("span", "memory-bar-label", `Heap · ${formatSize(heapVal)}`));
+    bar.append(seg);
+  }
+  if (stackVal > 0) {
+    const seg = el("div", "stack-heap-segment");
+    seg.style.width = `${(stackVal / total) * 100}%`;
+    seg.style.background = "var(--vscode-charts-orange, #d19a66)";
+    seg.title = `Stack: ${formatSize(stackVal)}`;
+    seg.append(el("span", "memory-bar-label", `Stack · ${formatSize(stackVal)}`));
+    bar.append(seg);
+  }
+  return bar;
+}
+
+function renderStackHeapField(label: string, field: StackHeapField): HTMLElement {
+  const wrap = el("div", "stack-heap-field");
+  wrap.append(el("div", "stack-heap-label", label));
+
+  if (field.kind === "not-found") {
+    wrap.append(el("p", "muted", "Not detected."));
+    return wrap;
+  }
+
+  const input = el("input", "cell-input hex-input mono") as HTMLInputElement;
+  input.value = field.currentValueRaw;
+  input.onchange = () => applyLocalEdit((s) => updateStackHeapSize(s, field, input.value.trim()));
+  wrap.append(input);
+
+  const meta: string[] = [];
+  if (field.currentValueNumeric !== undefined) meta.push(formatSize(field.currentValueNumeric));
+  if (field.regionName) meta.push(`in ${field.regionName}`);
+  if (field.prefix) meta.push(`overridable via ${field.symbolName ?? "DEFINED()"}`);
+  if (meta.length > 0) wrap.append(el("p", "stack-heap-meta", meta.join(" · ")));
+
+  return wrap;
 }
 
 function sectionToInput(s: OutputSection, overrides: { vmaRegion: string | undefined }): OutputSectionInput {
@@ -440,11 +719,7 @@ function renderSectionRegionMappingTable(model: LinkerScript, sections: OutputSe
     }
     if (!s.placement.vmaRegion) noneOption.selected = true;
     select.onchange = () => {
-      post({
-        type: "updateOutputSection",
-        name: s.name,
-        section: sectionToInput(s, { vmaRegion: select.value || undefined }),
-      });
+      applyLocalEdit((script) => updateOutputSection(script, s.name, sectionToInput(s, { vmaRegion: select.value || undefined })));
     };
     cell.append(select);
     row.append(cell);
@@ -493,16 +768,20 @@ function renderSectionsSection(model: LinkerScript): HTMLElement {
   }
   section.append(tree);
 
+  const buttonRow = el("div", "action-row");
   const regionNames = model.memory?.regions.map((r) => r.name) ?? [];
-  const addBtn = iconButton("add", "Add section", "action-btn-primary");
-  addBtn.onclick = () => section.append(renderSectionAddForm(section, addBtn, regionNames));
-  section.append(addBtn);
+  const addBtn = el("button", "action-btn action-btn-primary", "+ Add section");
+  addBtn.onclick = () => {
+    buttonRow.remove();
+    section.append(renderSectionAddForm(section, buttonRow, regionNames));
+  };
+  buttonRow.append(addBtn);
+  section.append(buttonRow);
 
   return section;
 }
 
-function renderSectionAddForm(section: HTMLElement, addBtn: HTMLElement, regionNames: string[]): HTMLElement {
-  addBtn.remove();
+function renderSectionAddForm(section: HTMLElement, buttonRow: HTMLElement, regionNames: string[]): HTMLElement {
   const form = el("div", "add-form");
   const nameInput = el("input") as HTMLInputElement;
   nameInput.placeholder = "section name, e.g. .rodata";
@@ -520,17 +799,14 @@ function renderSectionAddForm(section: HTMLElement, addBtn: HTMLElement, regionN
   const saveBtn = el("button", "action-btn action-btn-primary", "Add");
   saveBtn.onclick = () => {
     if (!nameInput.value.trim()) return;
-    post({
-      type: "addOutputSection",
-      section: { name: nameInput.value.trim(), body: [], vmaRegion: regionSelect.value || undefined },
-    });
+    applyLocalEdit((script) => addOutputSection(script, { name: nameInput.value.trim(), body: [], vmaRegion: regionSelect.value || undefined }));
     form.remove();
-    section.append(addBtn);
+    section.append(buttonRow);
   };
   const cancelBtn = el("button", "action-btn", "Cancel");
   cancelBtn.onclick = () => {
     form.remove();
-    section.append(addBtn);
+    section.append(buttonRow);
   };
 
   form.append(nameInput, regionSelect, saveBtn, cancelBtn);
@@ -563,7 +839,10 @@ function renderSectionNode(s: OutputSection): HTMLElement {
   header.append(el("span", "section-placement", placement.join(" ")));
 
   const deleteBtn = iconButton("trash", "Delete", "danger");
-  deleteBtn.onclick = () => post({ type: "deleteOutputSection", name: s.name });
+  deleteBtn.onclick = () => {
+    if (!confirm(`Delete output section "${s.name}"?`)) return;
+    applyLocalEdit((script) => deleteOutputSection(script, s.name));
+  };
   header.append(deleteBtn);
   item.append(header);
 
@@ -587,4 +866,3 @@ function renderSectionNode(s: OutputSection): HTMLElement {
 }
 
 post({ type: "ready" });
-render();
