@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.2.3 - 2026-09-25
+
+### Changed
+
+- Base Address is now narrower than Size/Stack/Heap Size (`.hex-input-narrow`,
+  120px vs. 170px) -- an address alone doesn't need as much room as a Size
+  field.
+- The decimal/human-readable size for the Size column is no longer visible
+  text under the input -- it's a `title` tooltip on the input itself now
+  (hover to see it), decluttering the row. Memory table column widths
+  rebalanced accordingly (Name gets more room now that Base Address needs
+  less; Size/End/Actions unchanged in spirit). Stack & Heap's meta line
+  (size + region + override info) is untouched -- it carries more than
+  just a decimal size, so it stays as visible text.
+
+## 0.2.2 - 2026-09-25
+
+### Fixed
+
+- **Size text fields were too small.** The 0.2.1 overlap fix put the Size
+  column's input side-by-side with its size-hint text in a flex row, which
+  forced a choice between a cramped 140px input or a truncated hint -- both
+  competing for the same column width. `.size-cell` is now a column
+  (input above, hint below) instead of a row, so the input gets the full
+  column width and the hint gets its own full-width line under it, with
+  full text instead of an ellipsis. `.hex-input` (Base Address, Size,
+  Stack/Heap Size -- everywhere the previous fix applied) widened
+  140px → 170px, with `max-width: 100%` so it still shrinks gracefully
+  rather than overflowing in a narrow panel instead of a fixed 900px page.
+  Memory table column widths rebalanced (Base Address and Size are now the
+  same width, since both hold just one input) to match.
+
 ## 0.2.1 - 2026-09-25
 
 ### Fixed

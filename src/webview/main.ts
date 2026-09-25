@@ -458,7 +458,7 @@ function renderMemoryRow(r: MemoryRegion): HTMLElement {
   const attrsInput = el("input", "cell-input mono") as HTMLInputElement;
   attrsInput.value = r.attributes;
   attrsInput.placeholder = "rwx";
-  const originInput = el("input", "cell-input hex-input mono") as HTMLInputElement;
+  const originInput = el("input", "cell-input hex-input-narrow mono") as HTMLInputElement;
   originInput.value = r.origin.raw;
   const lengthInput = el("input", "cell-input hex-input mono") as HTMLInputElement;
   lengthInput.value = r.length.raw;
@@ -481,13 +481,9 @@ function renderMemoryRow(r: MemoryRegion): HTMLElement {
   }
 
   lengthInput.onchange = commit;
-  const lengthCell = el("td", "size-cell");
+  if (r.length.value !== undefined) lengthInput.title = formatSize(r.length.value);
+  const lengthCell = el("td");
   lengthCell.append(lengthInput);
-  if (r.length.value !== undefined) {
-    const hint = el("span", "size-hint", formatSize(r.length.value));
-    hint.title = hint.textContent!;
-    lengthCell.append(hint);
-  }
   row.append(lengthCell);
 
   const endCell = el(

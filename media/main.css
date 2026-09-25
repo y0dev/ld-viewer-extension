@@ -237,32 +237,32 @@ table {
 
 .memory-table th:nth-child(1),
 .memory-table td:nth-child(1) {
-  width: 16%; /* Name */
+  width: 20%; /* Name */
 }
 
 .memory-table th:nth-child(2),
 .memory-table td:nth-child(2) {
-  width: 9%; /* Attrs */
+  width: 8%; /* Attrs */
 }
 
 .memory-table th:nth-child(3),
 .memory-table td:nth-child(3) {
-  width: 20%; /* Base Address */
+  width: 16%; /* Base Address -- narrower than Size; an address alone doesn't need as much room as an input + its own tooltip-only decimal size */
 }
 
 .memory-table th:nth-child(4),
 .memory-table td:nth-child(4) {
-  width: 26%; /* Size */
+  width: 21%; /* Size */
 }
 
 .memory-table th:nth-child(5),
 .memory-table td:nth-child(5) {
-  width: 18%; /* End */
+  width: 20%; /* End */
 }
 
 .memory-table th:nth-child(6),
 .memory-table td:nth-child(6) {
-  width: 11%; /* Actions */
+  width: 15%; /* Actions */
 }
 
 th {
@@ -302,31 +302,25 @@ tbody tr:hover td {
   white-space: nowrap;
 }
 
-.size-cell {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0; /* lets children (esp. size-hint) shrink/truncate instead of overflowing the fixed-width column */
-}
-
-.size-hint {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11.5px;
-  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
-}
-
 /* Every field that holds a hex address/size value (Base Address, Size,
    Origin/Length in the add-forms, Stack/Heap Size) shares this fixed
    width, so they line up instead of each stretching to fit whatever
-   container happens to hold it (a table cell, a flex row next to a size
-   hint, a bare form row). Name/Attrs/section-name fields stay flexible --
-   they hold variable-length identifiers, not fixed-format hex numbers. */
+   container happens to hold it (a table cell, a bare form row). Name/
+   Attrs/section-name fields stay flexible -- they hold variable-length
+   identifiers, not fixed-format hex numbers. The decimal/human-readable
+   size (for Size and Stack/Heap Size) is a `title` tooltip on the input
+   itself, not visible text -- see renderMemoryRow/renderStackHeapField. */
 .hex-input {
-  width: 140px;
+  width: 170px;
+  max-width: 100%; /* shrinks gracefully in a narrow panel instead of overflowing its column/container */
+  flex: none;
+}
+
+/* Base Address specifically: narrower than the other hex-input fields --
+   an address alone doesn't need as much room. */
+.hex-input-narrow {
+  width: 120px;
+  max-width: 100%;
   flex: none;
 }
 
