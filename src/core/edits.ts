@@ -4,10 +4,17 @@
  * applyTextEdits() and re-parse to refresh the model -- these functions
  * never mutate the LinkerScript object in place.
  */
+import { tokenize } from "./tokenizer";
 import { LinkerScript, MemoryRegion, OutputSection, SectionBodyStatement, Span, TextEdit } from "./model";
 import { MemoryRegionInput, OutputSectionInput, printMemoryRegion, printOutputSection } from "./serializer";
 
 export class EditError extends Error {}
+
+function emptyBlockInsertAt(source: string, span: Span): number {
+  const close = tokenize(source.slice(span.start, span.end)).filter((t) => t.text === "}").pop();
+  if (!close) throw new EditError("Cannot add to an unterminated block.");
+  return span.start + close.start;
+}
 
 function findMemoryRegion(script: LinkerScript, name: string): MemoryRegion {
   const region = script.memory?.regions.find((r) => r.name === name);
@@ -54,7 +61,7 @@ export function addMemoryRegion(script: LinkerScript, region: MemoryRegionInput)
   if (script.memory.regions.some((r) => r.name === region.name)) {
     throw new EditError(`A memory region named "${region.name}" already exists.`);
   }
-  const insertAt = script.memory.regions.length > 0 ? script.memory.regions[script.memory.regions.length - 1].span.end : script.memory.span.start;
+  const insertAt = script.memory.regions.length > 0 ? script.memory.regions[script.memory.regions.length - 1].span.end : emptyBlockInsertAt(script.sourceText, script.memory.span);
   const text = script.memory.regions.length > 0 ? `\n${printMemoryRegion(region)}` : `\n${printMemoryRegion(region)}\n`;
   return [{ span: { start: insertAt, end: insertAt }, newText: text }];
 }
@@ -96,7 +103,7 @@ export function addOutputSection(script: LinkerScript, section: OutputSectionInp
   if (script.sections.sections.some((s) => s.name === section.name)) {
     throw new EditError(`An output section named "${section.name}" already exists.`);
   }
-  const insertAt = script.sections.sections.length > 0 ? script.sections.sections[script.sections.sections.length - 1].span.end : script.sections.span.start;
+  const insertAt = script.sections.sections.length > 0 ? script.sections.sections[script.sections.sections.length - 1].span.end : emptyBlockInsertAt(script.sourceText, script.sections.span);
   const text = script.sections.sections.length > 0 ? `\n${printOutputSection(section)}` : `\n${printOutputSection(section)}\n`;
   return [{ span: { start: insertAt, end: insertAt }, newText: text }];
 }

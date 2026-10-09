@@ -50,6 +50,8 @@ let undoStack: string[] = [];
 let redoStack: string[] = [];
 let textareaFocused = false;
 let receivedFirstUpdate = false;
+let pendingSave: string | null = null;
+let externalConflict = false;
 
 // Which sections are expanded in the Section Detail tree. Lives outside
 // `state` since it isn't server data -- it's re-derived from the model on
@@ -71,6 +73,19 @@ function reparse(): void {
 
 window.addEventListener("message", (event: MessageEvent<HostMessage>) => {
   const msg = event.data;
+  if (msg.type === "save-result") {
+    if (pendingSave !== msg.text) return;
+    pendingSave = null;
+    if (msg.error) {
+      render();
+      showTransientError(msg.error);
+    } else {
+      state.lastSavedText = msg.text;
+      externalConflict = false;
+      render();
+    }
+    return;
+  }
   if (msg.type !== "update") return;
   const incoming = msg.text;
 
@@ -85,22 +100,30 @@ window.addEventListener("message", (event: MessageEvent<HostMessage>) => {
 
   if (incoming === state.lastSavedText) return; // our own save echoing back, or a genuine no-op
 
+  if (pendingSave === incoming) return; // wait for disk-save acknowledgement
+  const wasDirty = isDirty();
   state.lastSavedText = incoming;
-  if (!isDirty()) {
+  if (!wasDirty) {
     state.draftText = incoming;
     undoStack = [];
     redoStack = [];
     reparse();
+    const textarea = root.querySelector("textarea");
+    if (textareaFocused && textarea) textarea.value = incoming;
     render();
   } else {
-    showTransientError("This file changed on disk. Your unsaved Studio changes were kept -- Save to overwrite, or close and reopen the file to discard them.");
+    externalConflict = true;
+    showTransientError("This file changed on disk. Your unsaved Studio changes were kept -- Save to overwrite, or use Discard draft to load the current document.");
   }
 });
 
 function save(): void {
-  if (!isDirty()) return;
-  state.lastSavedText = state.draftText;
-  post({ type: "save", text: state.draftText });
+  // Commit a focused Studio input before Ctrl/Cmd+S reads the draft.
+  if (document.activeElement instanceof HTMLInputElement) document.activeElement.blur();
+  if (!isDirty() || pendingSave !== null) return;
+  if (externalConflict && !confirm("This file changed outside Studio. Overwrite it with your draft?")) return;
+  pendingSave = state.draftText;
+  post({ type: "save", text: state.draftText, baseText: state.lastSavedText });
   render();
 }
 
@@ -254,11 +277,23 @@ function renderToolbarActions(): HTMLElement {
 
   const dirty = isDirty();
   const saveBtn = el("button", "action-btn" + (dirty ? " action-btn-primary" : ""), dirty ? "Save ●" : "Save") as HTMLButtonElement;
-  saveBtn.disabled = !dirty;
+  saveBtn.disabled = !dirty || pendingSave !== null;
+  if (pendingSave !== null) saveBtn.textContent = "Saving…";
   saveBtn.title = "Save (Ctrl+S)";
   saveBtn.onclick = save;
 
-  toolbar.append(undoBtn, redoBtn, saveBtn);
+  const discardBtn = el("button", "action-btn", "Discard draft");
+  discardBtn.disabled = !dirty || pendingSave !== null;
+  discardBtn.onclick = () => {
+    if (!confirm("Discard your unsaved Studio draft and load the current document?")) return;
+    state.draftText = state.lastSavedText;
+    undoStack = [];
+    redoStack = [];
+    externalConflict = false;
+    reparse();
+    render();
+  };
+  toolbar.append(undoBtn, redoBtn, discardBtn, saveBtn);
   return toolbar;
 }
 
@@ -285,6 +320,7 @@ function renderTextView(): HTMLElement {
   const textarea = el("textarea", "text-editor") as HTMLTextAreaElement;
   textarea.value = state.draftText;
   textarea.spellcheck = false;
+  textarea.setAttribute("aria-label", "Linker script source");
 
   let textBeforeFocus = state.draftText;
   textarea.onfocus = () => {
@@ -455,13 +491,16 @@ function renderMemoryRow(r: MemoryRegion): HTMLElement {
 
   const nameInput = el("input", "cell-input mono") as HTMLInputElement;
   nameInput.value = r.name;
+  nameInput.setAttribute("aria-label", `Memory region ${r.name} name`);
   const attrsInput = el("input", "cell-input mono") as HTMLInputElement;
   attrsInput.value = r.attributes;
   attrsInput.placeholder = "rwx";
   const originInput = el("input", "cell-input hex-input-narrow mono") as HTMLInputElement;
   originInput.value = r.origin.raw;
+  originInput.setAttribute("aria-label", `Memory region ${r.name} origin`);
   const lengthInput = el("input", "cell-input hex-input mono") as HTMLInputElement;
   lengthInput.value = r.length.raw;
+  lengthInput.setAttribute("aria-label", `Memory region ${r.name} length`);
 
   const commit = () => {
     applyLocalEdit((s) =>
@@ -659,6 +698,7 @@ function renderStackHeapField(label: string, field: StackHeapField): HTMLElement
 
   const input = el("input", "cell-input hex-input mono") as HTMLInputElement;
   input.value = field.currentValueRaw;
+  input.setAttribute("aria-label", label);
   input.onchange = () => applyLocalEdit((s) => updateStackHeapSize(s, field, input.value.trim()));
   wrap.append(input);
 

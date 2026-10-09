@@ -18,7 +18,13 @@ export interface HostUpdateMessage {
   text: string;
 }
 
-export type HostMessage = HostUpdateMessage;
+export interface HostSaveResultMessage {
+  type: "save-result";
+  text: string;
+  error?: string;
+}
+
+export type HostMessage = HostUpdateMessage | HostSaveResultMessage;
 
 export interface WebviewReadyMessage {
   type: "ready";
@@ -27,6 +33,7 @@ export interface WebviewReadyMessage {
 export interface WebviewSaveMessage {
   type: "save";
   text: string;
+  baseText: string;
 }
 
 export type WebviewMessage = WebviewReadyMessage | WebviewSaveMessage;

@@ -88,6 +88,18 @@ comments/formatting are not preserved, and a newly added region/section is
 appended with no comment. The Text view is the escape hatch either way --
 nothing is only editable through the lossy path.
 
+## Saving and external changes
+
+Save stays pending until VS Code confirms the edit and disk write. Failures
+keep the draft unsaved. If another editor changes the file, a clean Studio
+view reloads it; a dirty Studio view keeps your draft and asks before
+replacing the external changes. **Discard draft** loads the current document
+without closing the panel. Ctrl/Cmd+S commits the currently focused memory
+field before saving.
+
+Drafts live in the webview. Save before closing the panel: local unsaved
+changes do not reliably participate in VS Code's native dirty-file warning.
+
 ## Scope
 
 Implements the common real-world subset of the ld script grammar:
@@ -105,13 +117,21 @@ to the Text view, rather than producing a broken parse.
 ## Development
 
 ```
-npm install
+npm ci
 npm run check-types  # tsc --noEmit against all three tsconfigs (core/host/webview)
 npm run lint
-npm test             # Mocha, plain Node -- no extension host required
+npm test             # Core + mocked-host tests; no extension host required
+npm run test:browser  # Real webview bundle in Chromium; see prerequisites below
 npm run build         # esbuild, both bundles (dev: sourcemaps, unminified)
 npm run package       # produces linker-script-studio-<version>.vsix
 ```
+
+The browser suite requires Chromium at `/usr/bin/chromium`, or set
+`CHROMIUM_PATH` to your Chromium executable. `playwright-core` drives that
+browser without downloading one. On a trusted isolated cloud container the
+suite launches Chromium with `--no-sandbox`; run it only against this local
+test harness. The Node suite does not require Chromium. To type-check test
+sources as well, run `npx tsc -p tsconfig.json --noEmit`.
 
 `npm run package` cleans any stale `.vsix`, type-checks, then runs `vsce
 package`, whose own `vscode:prepublish` hook runs the **production** build
@@ -130,3 +150,27 @@ unmodified vendor linker scripts (a Xilinx one and a PolarFire SoC
 DDR-loaded-by-bootloader one) -- worth promoting into `fixtures/` and
 wiring into the fixture tests, since real files are what actually surfaces
 grammar edge cases.
+
+
+## Release validation
+
+The 0.2.4 development pass covers core, mocked-host, and Chromium webview
+regressions. See [architecture and security review](docs/review.md) for
+findings and remaining limits. VSIX packaging prepares a local artifact;
+it does not publish the extension.
+
+Before Marketplace publication, run a real Extension Development Host check:
+
+1. Open this checkout in VS Code and press F5 (Run Extension).
+2. Open both fixtures and the real files under `examples/` in Studio. Check
+   that styles, codicons, region bars, and all PolarFire hart stacks render.
+3. Edit memory and stack/heap sizes, switch Studio/Text, and undo/redo. Save,
+   close, and reopen to verify the file content on disk.
+4. Modify the file through another editor with both clean and dirty Studio
+   drafts. Verify updates, overwrite confirmation, and Discard draft.
+5. Try a read-only file or a failed write. Verify Save reports failure and
+   keeps the draft unsaved. Test Ctrl/Cmd+S while a memory field has focus.
+
+This live VS Code check has not been run in the cloud machine, which has no
+VS Code executable. The browser suite exercises the webview with a simulated
+bridge and does not replace this check.

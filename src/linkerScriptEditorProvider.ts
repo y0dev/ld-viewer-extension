@@ -1,5 +1,6 @@
+import { randomBytes } from "crypto";
 import * as vscode from "vscode";
-import { HostMessage, WebviewMessage } from "./shared/messages";
+import { HostMessage } from "./shared/messages";
 
 interface Session {
   document: vscode.TextDocument;
@@ -46,7 +47,7 @@ export class LinkerScriptEditorProvider implements vscode.CustomTextEditorProvid
       // Must cover every directory a webview resource is served from --
       // "dist" for the bundle, "media" for the stylesheet and codicon font.
       // Too narrow a root doesn't error, it silently blocks the resource.
-      localResourceRoots: [this.context.extensionUri],
+      localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "dist"), vscode.Uri.joinPath(this.context.extensionUri, "media")],
     };
     panel.webview.html = getHtml(panel.webview, this.context.extensionUri);
 
@@ -58,20 +59,39 @@ export class LinkerScriptEditorProvider implements vscode.CustomTextEditorProvid
       if (e.document.uri.toString() === document.uri.toString()) postUpdate();
     });
 
-    panel.webview.onDidReceiveMessage(async (message: WebviewMessage) => {
+    let saving = false;
+    const messageSub = panel.webview.onDidReceiveMessage(async (message: unknown) => {
+      if (!message || typeof message !== "object" || !("type" in message)) return;
       if (message.type === "ready") {
         postUpdate();
         return;
       }
-      if (message.type === "save") {
-        await replaceWholeDocument(document, message.text);
-        await document.save();
-        return;
+      if (message.type === "save" && "text" in message && typeof message.text === "string" &&
+          "baseText" in message && typeof message.baseText === "string") {
+        const text = message.text;
+        if (saving) {
+          postMessage(panel, { type: "save-result", text, error: "A save is already in progress." });
+          return;
+        }
+        saving = true;
+        try {
+          if (document.getText() !== message.baseText && document.getText() !== text) throw new Error("The document changed. Review its latest content before saving again.");
+          await replaceWholeDocument(document, text);
+          if (!await document.save()) throw new Error("VS Code could not save the file. Your draft is still unsaved.");
+          if (document.getText() !== text) throw new Error("The document changed while saving. Your draft was kept.");
+          postMessage(panel, { type: "save-result", text });
+        } catch (error) {
+          postMessage(panel, { type: "save-result", text, error: error instanceof Error ? error.message : String(error) });
+          if (document.getText() !== text) postUpdate();
+        } finally {
+          saving = false;
+        }
       }
     });
 
     panel.onDidDispose(() => {
       changeSub.dispose();
+      messageSub.dispose();
       LinkerScriptEditorProvider.sessions.delete(session);
     });
 
@@ -84,7 +104,7 @@ async function replaceWholeDocument(document: vscode.TextDocument, text: string)
   const edit = new vscode.WorkspaceEdit();
   const fullRange = new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length));
   edit.replace(document.uri, fullRange, text);
-  await vscode.workspace.applyEdit(edit);
+  if (!await vscode.workspace.applyEdit(edit)) throw new Error("VS Code rejected the document edit.");
 }
 
 function postMessage(panel: vscode.WebviewPanel, message: HostMessage): void {
@@ -113,8 +133,5 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 }
 
 function getNonce(): string {
-  let text = "";
-  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) text += possible.charAt(Math.floor(Math.random() * possible.length));
-  return text;
+  return randomBytes(24).toString("hex");
 }

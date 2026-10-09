@@ -2,7 +2,7 @@
   "name": "linker-script-studio",
   "displayName": "Linker Script Studio",
   "description": "Structured, editable view for GNU ld linker scripts (.ld/.lds), with a raw text view always available.",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "publisher": "devdoesit",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -83,7 +83,8 @@
     "test": "mocha",
     "pretest": "npm run check-types",
     "vscode:prepublish": "npm run build:prod",
-    "package": "node scripts/clean-vsix.js && npm run check-types && npx --yes @vscode/vsce package --no-dependencies"
+    "package": "node scripts/clean-vsix.js && npm run check-types && npx --yes @vscode/vsce package --no-dependencies",
+    "test:browser": "mocha --no-config --require ts-node/register \"test/webview/**/*.test.ts\" --timeout 15000"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.7",
@@ -95,6 +96,7 @@
     "esbuild": "^0.23.0",
     "eslint": "^8.57.0",
     "mocha": "^10.6.0",
+    "playwright-core": "^1.64.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.5.3"
   },

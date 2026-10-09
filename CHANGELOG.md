@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.4 - 2026-10-09
+
+### Fixed
+
+- External document updates now refresh clean Studio/Text views correctly.
+- Save waits for edit and disk-write acknowledgement; failures keep the draft unsaved and permit retry. Stale saves cannot silently overwrite newer document content.
+- Ctrl/Cmd+S commits the focused memory field. Discard draft provides an explicit way to reload external changes.
+- Adding regions and sections to empty blocks now inserts inside the block.
+- Arithmetic shifts use linker precedence and preserve high positive addresses; unary plus and remainder are supported. Unsafe integer arithmetic and division by zero remain opaque.
+
+### Changed
+
+- Added accessible names to source, memory, and stack/heap inputs.
+- Restricted webview resource roots, cryptographic script nonces, and runtime validation of host messages.
+- Added core, mocked-host, and Chromium browser regressions, including stack/heap editing against both real vendor examples.
+- Documented architecture/security findings and a live VS Code release checklist.
+
+### Validation
+
+- 74 core/host tests and 10 Chromium browser tests pass; application/test type checks, lint, and VSIX packaging also pass.
+- The live VS Code Extension Development Host smoke test remains pending; browser tests use a simulated host bridge.
+
 ## 0.2.3 - 2026-09-25
 
 ### Changed

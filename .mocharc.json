@@ -1,6 +1,13 @@
 {
-  "require": ["ts-node/register"],
-  "extension": ["ts"],
-  "spec": "test/**/*.test.ts",
+  "require": [
+    "ts-node/register"
+  ],
+  "extension": [
+    "ts"
+  ],
+  "spec": [
+    "test/core/**/*.test.ts",
+    "test/host/**/*.test.ts"
+  ],
   "timeout": 5000
 }
