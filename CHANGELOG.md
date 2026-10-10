@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.5 - 2026-10-09
+
+### Changed
+
+- Main content now uses the full editor width with responsive side padding.
+- Memory maps show a readable color-keyed grid of every region name and size, including tiny and zero-size regions. Select a region to focus its table entry. Address-map segments retain their proportional scale without clipped inline labels.
+
 ## 0.2.4 - 2026-10-09
 
 ### Fixed

@@ -436,22 +436,40 @@ function renderMemorySection(model: LinkerScript): HTMLElement {
   const range = regionRange(model);
   if (range) {
     const bar = el("div", "memory-bar");
-    let colorIndex = 0;
-    for (const r of model.memory.regions) {
-      if (r.origin.value === undefined || r.length.value === undefined) continue;
+    bar.setAttribute("aria-label", "Memory address map; region details are listed below");
+    for (const [index, r] of model.memory.regions.entries()) {
+      if (r.origin.value === undefined || r.length.value === undefined || r.length.value <= 0) continue;
       const seg = el("div", "memory-bar-segment");
-      const leftPct = ((r.origin.value - range.min) / (range.max - range.min)) * 100;
-      const widthPct = Math.max((r.length.value / (range.max - range.min)) * 100, 0.5);
-      seg.style.left = `${leftPct}%`;
-      seg.style.width = `${widthPct}%`;
-      seg.style.background = REGION_PALETTE[colorIndex % REGION_PALETTE.length];
-      colorIndex++;
-      seg.title = `${r.name}: ${formatHex(r.origin.value)} + ${formatHex(r.length.value)}`;
-      seg.append(el("span", "memory-bar-label", r.name));
+      seg.style.left = `${((r.origin.value - range.min) / (range.max - range.min)) * 100}%`;
+      seg.style.width = `${(r.length.value / (range.max - range.min)) * 100}%`;
+      seg.style.background = REGION_PALETTE[index % REGION_PALETTE.length];
+      seg.title = `${r.name}: ${formatHex(r.origin.value)} · ${formatSize(r.length.value)}`;
       bar.append(seg);
     }
     section.append(bar);
   }
+
+  // Labels stay outside the address scale so small and zero-size regions
+  // remain readable even alongside multi-gigabyte DDR regions.
+  const legend = el("div", "memory-region-legend");
+  for (const [index, r] of model.memory.regions.entries()) {
+    const item = el("button", "memory-region-key");
+    const swatch = el("span", "region-swatch");
+    swatch.style.background = REGION_PALETTE[index % REGION_PALETTE.length];
+    swatch.setAttribute("aria-hidden", "true");
+    const details = el("span", "memory-region-key-details");
+    details.append(el("span", "mono memory-region-key-name", r.name));
+    details.append(el("span", "memory-region-key-size", r.length.value !== undefined ? formatSize(r.length.value) : r.length.raw));
+    item.append(swatch, details);
+    item.title = `${r.name} · origin ${r.origin.raw} · size ${r.length.raw}`;
+    item.onclick = () => {
+      const input = section.querySelectorAll<HTMLInputElement>(".memory-table tbody tr input")[index * 4];
+      input?.focus();
+      input?.select();
+    };
+    legend.append(item);
+  }
+  section.append(legend);
 
   const table = el("table", "memory-table");
   const thead = el("thead");
