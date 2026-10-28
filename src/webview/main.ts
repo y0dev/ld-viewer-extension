@@ -59,8 +59,9 @@ let externalConflict = false;
 const expandedSections = new Set<string>();
 
 // The memory region whose stack/heap usage is shown under the region legend.
-// Same reasoning as expandedSections; falls back to the first region if the
-// selected one is renamed or deleted.
+// Same reasoning as expandedSections; when unset (or the selected region is
+// renamed or deleted) it falls back to the first region that hosts a
+// stack/heap, then to the first region.
 let selectedRegionName: string | null = null;
 
 const root = document.getElementById("root")!;
@@ -457,7 +458,13 @@ function renderMemorySection(model: LinkerScript): HTMLElement {
   // Labels stay outside the address scale so small and zero-size regions
   // remain readable even alongside multi-gigabyte DDR regions.
   const regions = model.memory.regions;
-  if (!regions.some((r) => r.name === selectedRegionName)) selectedRegionName = regions[0]?.name ?? null;
+  if (!regions.some((r) => r.name === selectedRegionName)) {
+    const used = regions.find((r) => {
+      const usage = summarizeRegionStackHeap(model, r.name);
+      return usage.stack.length + usage.heap.length > 0;
+    });
+    selectedRegionName = (used ?? regions[0])?.name ?? null;
+  }
   let usagePanel = renderRegionUsage(model, selectedRegionName);
   const legendItems: HTMLElement[] = [];
 

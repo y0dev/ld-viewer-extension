@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.8 - 2026-10-27
+
+### Changed
+
+- The stack/heap usage panel now defaults to the first memory region that actually hosts a stack or heap, instead of the first region listed.
+
 ## 0.2.7 - 2026-10-27
 
 ### Added
