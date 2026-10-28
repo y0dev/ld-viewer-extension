@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.6 - 2026-10-27
+
+### Added
+
+- Selecting a memory region now shows how much stack and heap is reserved in it: a usage bar labelled with bytes used, region size, and percentage, plus stack, heap, total, and remaining figures. Over-committed regions are flagged.
+
 ## 0.2.5 - 2026-10-09
 
 ### Changed

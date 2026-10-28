@@ -143,6 +143,35 @@ export function detectStackHeap(script: LinkerScript): StackHeapDetection {
   };
 }
 
+export interface RegionStackHeapUsage {
+  regionName: string;
+  /** The region's LENGTH in bytes, or undefined if it isn't a plain number. */
+  regionSize: number | undefined;
+  stack: StackHeapField[];
+  heap: StackHeapField[];
+  stackBytes: number;
+  heapBytes: number;
+  /** True if any stack/heap field in this region has a size that couldn't be evaluated, so the byte totals are a lower bound. */
+  hasUnknownSize: boolean;
+}
+
+/** How much of one MEMORY region the detected stack(s) and heap(s) reserve -- only fields whose .stack/.heap section is placed in that region (`> region`) count. */
+export function summarizeRegionStackHeap(script: LinkerScript, regionName: string): RegionStackHeapUsage {
+  const detected = detectStackHeap(script);
+  const stack = detected.stack.filter((f) => f.regionName === regionName);
+  const heap = detected.heap.filter((f) => f.regionName === regionName);
+  const sum = (fields: StackHeapField[]) => fields.reduce((total, f) => total + (f.currentValueNumeric ?? 0), 0);
+  return {
+    regionName,
+    regionSize: script.memory?.regions.find((r) => r.name === regionName)?.length.value,
+    stack,
+    heap,
+    stackBytes: sum(stack),
+    heapBytes: sum(heap),
+    hasUnknownSize: [...stack, ...heap].some((f) => f.currentValueNumeric === undefined),
+  };
+}
+
 /** Writes a new value for a field detected by detectStackHeap(), preserving its DEFINED()-ternary wrapper (if any) and whether it lives in a top-level symbol or directly in a section body. */
 export function updateStackHeapSize(script: LinkerScript, field: StackHeapField, newValueRaw: string): TextEdit[] {
   const fullValue = `${field.prefix}${newValueRaw.trim()}`;

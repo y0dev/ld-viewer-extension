@@ -3,13 +3,34 @@ import * as fs from "fs";
 import * as path from "path";
 import { parseLinkerScript } from "../../src/core/parser";
 import { applyTextEdits } from "../../src/core/serializer";
-import { detectStackHeap, updateStackHeapSize } from "../../src/core/stackHeap";
+import { detectStackHeap, summarizeRegionStackHeap, updateStackHeapSize } from "../../src/core/stackHeap";
 
 const EXAMPLES_DIR = path.join(__dirname, "..", "..", "examples");
 
 function readExample(name: string): string {
   return fs.readFileSync(path.join(EXAMPLES_DIR, name), "utf8");
 }
+
+describe("per-region stack/heap usage", () => {
+  it("Xilinx: sums only the stacks/heaps placed in the selected region", () => {
+    const { script } = parseLinkerScript(readExample("xilinx.ld"));
+    const ddr = summarizeRegionStackHeap(script, "psu_ddr_0_memory_0");
+    assert.strictEqual(ddr.stack.length, 4);
+    assert.strictEqual(
+      ddr.stackBytes,
+      detectStackHeap(script).stack.reduce((n, f) => n + f.currentValueNumeric!, 0),
+    );
+    assert.strictEqual(ddr.heapBytes, 0x2000);
+    assert.strictEqual(ddr.hasUnknownSize, false);
+    assert.ok(ddr.regionSize !== undefined && ddr.regionSize > 0);
+
+    const other = script.memory!.regions.find((r) => r.name !== "psu_ddr_0_memory_0")!;
+    const empty = summarizeRegionStackHeap(script, other.name);
+    assert.strictEqual(empty.stackBytes, 0);
+    assert.strictEqual(empty.heapBytes, 0);
+    assert.strictEqual(empty.stack.length + empty.heap.length, 0);
+  });
+});
 
 describe("stack/heap detection and editing", () => {
   it("Xilinx: detects the DEFINED()-ternary symbol convention and edits only the default", () => {

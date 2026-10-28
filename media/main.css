@@ -679,6 +679,58 @@ table.mapping-table {
   outline-offset: 2px;
 }
 
+.memory-region-key.selected {
+  border-color: var(--vscode-focusBorder, #3794ff);
+  background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground));
+  color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+}
+
+.region-usage {
+  margin-bottom: 20px;
+}
+
+.region-usage-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.region-usage-bar {
+  position: relative;
+  height: 24px;
+  margin-bottom: 10px;
+}
+
+.region-usage-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--vscode-foreground);
+  text-shadow: 0 0 3px var(--vscode-editor-background, #1e1e1e), 0 0 3px var(--vscode-editor-background, #1e1e1e);
+  pointer-events: none;
+}
+
+.region-usage-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.region-usage-list dt {
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+.region-usage-list dd {
+  margin: 0;
+}
+
 .region-swatch {
   flex: 0 0 10px;
   width: 10px;

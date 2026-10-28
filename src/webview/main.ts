@@ -23,7 +23,7 @@ import {
   deleteOutputSection,
   addSharedMemoryRegion,
 } from "../core/edits";
-import { StackHeapField, detectStackHeap, updateStackHeapSize } from "../core/stackHeap";
+import { RegionStackHeapUsage, StackHeapField, detectStackHeap, summarizeRegionStackHeap, updateStackHeapSize } from "../core/stackHeap";
 import { HostMessage, WebviewMessage } from "../shared/messages";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void; setState(s: unknown): void; getState(): unknown };
@@ -57,6 +57,11 @@ let externalConflict = false;
 // `state` since it isn't server data -- it's re-derived from the model on
 // each update, but must survive across those updates.
 const expandedSections = new Set<string>();
+
+// The memory region whose stack/heap usage is shown under the region legend.
+// Same reasoning as expandedSections; falls back to the first region if the
+// selected one is renamed or deleted.
+let selectedRegionName: string | null = null;
 
 const root = document.getElementById("root")!;
 
@@ -451,9 +456,17 @@ function renderMemorySection(model: LinkerScript): HTMLElement {
 
   // Labels stay outside the address scale so small and zero-size regions
   // remain readable even alongside multi-gigabyte DDR regions.
+  const regions = model.memory.regions;
+  if (!regions.some((r) => r.name === selectedRegionName)) selectedRegionName = regions[0]?.name ?? null;
+  let usagePanel = renderRegionUsage(model, selectedRegionName);
+  const legendItems: HTMLElement[] = [];
+
   const legend = el("div", "memory-region-legend");
   for (const [index, r] of model.memory.regions.entries()) {
     const item = el("button", "memory-region-key");
+    legendItems.push(item);
+    item.classList.toggle("selected", r.name === selectedRegionName);
+    item.setAttribute("aria-pressed", String(r.name === selectedRegionName));
     const swatch = el("span", "region-swatch");
     swatch.style.background = REGION_PALETTE[index % REGION_PALETTE.length];
     swatch.setAttribute("aria-hidden", "true");
@@ -463,6 +476,15 @@ function renderMemorySection(model: LinkerScript): HTMLElement {
     item.append(swatch, details);
     item.title = `${r.name} · origin ${r.origin.raw} · size ${r.length.raw}`;
     item.onclick = () => {
+      selectedRegionName = r.name;
+      legendItems.forEach((other, i) => {
+        const isSelected = i === index;
+        other.classList.toggle("selected", isSelected);
+        other.setAttribute("aria-pressed", String(isSelected));
+      });
+      const next = renderRegionUsage(model, r.name);
+      usagePanel.replaceWith(next);
+      usagePanel = next;
       const input = section.querySelectorAll<HTMLInputElement>(".memory-table tbody tr input")[index * 4];
       input?.focus();
       input?.select();
@@ -470,6 +492,7 @@ function renderMemorySection(model: LinkerScript): HTMLElement {
     legend.append(item);
   }
   section.append(legend);
+  section.append(usagePanel);
 
   const table = el("table", "memory-table");
   const thead = el("thead");
@@ -500,6 +523,72 @@ function renderMemorySection(model: LinkerScript): HTMLElement {
   section.append(buttonRow);
 
   return section;
+}
+
+/** Stack/heap reserved in the selected region, against that region's size. */
+function renderRegionUsage(model: LinkerScript, regionName: string | null): HTMLElement {
+  const panel = el("div", "region-usage");
+  if (!regionName) return panel;
+  const usage: RegionStackHeapUsage = summarizeRegionStackHeap(model, regionName);
+
+  panel.append(el("h3", "region-usage-title", `Stack & heap in ${regionName}`));
+
+  if (usage.stack.length === 0 && usage.heap.length === 0) {
+    panel.append(el("p", "muted", `No .stack or .heap section is placed in ${regionName}.`));
+    return panel;
+  }
+
+  const used = usage.stackBytes + usage.heapBytes;
+  const size = usage.regionSize;
+  const percentOf = (bytes: number) => {
+    if (!size || size <= 0) return "";
+    const pct = (bytes / size) * 100;
+    return ` · ${pct > 0 && pct < 0.01 ? "<0.01" : pct < 1 ? pct.toFixed(2) : pct.toFixed(1)}%`;
+  };
+
+  if (size !== undefined && size > 0) {
+    const bar = el("div", "stack-heap-bar region-usage-bar");
+    bar.setAttribute("aria-label", `${formatSize(used)} of ${formatSize(size)} used by stack and heap`);
+    const parts: [string, number, string][] = [
+      ["Stack", usage.stackBytes, REGION_PALETTE[0]],
+      ["Heap", usage.heapBytes, REGION_PALETTE[1]],
+    ];
+    for (const [label, bytes, color] of parts) {
+      if (bytes <= 0) continue;
+      const seg = el("div", "stack-heap-segment");
+      // Clamped so an over-committed region still renders as a full bar.
+      seg.style.width = `${Math.min(100, (bytes / size) * 100)}%`;
+      seg.style.background = color;
+      seg.title = `${label}: ${formatSize(bytes)}${percentOf(bytes)}`;
+      bar.append(seg);
+    }
+    // Overlaid on the whole bar rather than a segment: the used portion can be a sliver of a multi-GB region.
+    bar.append(el("span", "region-usage-label mono", `${used.toLocaleString()} B / ${size.toLocaleString()} B${percentOf(used)}`));
+    panel.append(bar);
+  }
+
+  const rows: [string, string][] = [];
+  if (usage.stack.length > 0) rows.push([usage.stack.length > 1 ? `Stack (${usage.stack.length} stacks)` : "Stack", `${formatSize(usage.stackBytes)}${percentOf(usage.stackBytes)}`]);
+  if (usage.heap.length > 0) rows.push([usage.heap.length > 1 ? `Heap (${usage.heap.length} heaps)` : "Heap", `${formatSize(usage.heapBytes)}${percentOf(usage.heapBytes)}`]);
+  rows.push(["Total used", `${formatSize(used)}${percentOf(used)}`]);
+  if (size !== undefined) {
+    rows.push(["Region size", formatSize(size)]);
+    rows.push([used > size ? "Over by" : "Remaining", formatSize(Math.abs(size - used))]);
+  }
+
+  const list = el("dl", "region-usage-list");
+  for (const [term, value] of rows) {
+    list.append(el("dt", undefined, term), el("dd", "mono", value));
+  }
+  panel.append(list);
+
+  if (usage.hasUnknownSize) {
+    panel.append(el("p", "muted", "Some stack/heap sizes are not plain numbers, so the totals above are a lower bound."));
+  }
+  if (size !== undefined && used > size) {
+    panel.append(el("p", "status-error", `Stack and heap reserve more than ${regionName} can hold.`));
+  }
+  return panel;
 }
 
 /** Reads all four fields live from the row's own inputs and commits the full row as one local edit, keyed by the name the row was rendered with -- safe even if the name field itself was just edited (see applyLocalEdit). */
