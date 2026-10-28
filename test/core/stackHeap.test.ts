@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { parseLinkerScript } from "../../src/core/parser";
 import { applyTextEdits } from "../../src/core/serializer";
+import { validate } from "../../src/core/validate";
 import { detectStackHeap, summarizeRegionStackHeap, updateStackHeapSize } from "../../src/core/stackHeap";
 
 const EXAMPLES_DIR = path.join(__dirname, "..", "..", "examples");
@@ -29,6 +30,30 @@ describe("per-region stack/heap usage", () => {
     assert.strictEqual(empty.stackBytes, 0);
     assert.strictEqual(empty.heapBytes, 0);
     assert.strictEqual(empty.stack.length + empty.heap.length, 0);
+  });
+});
+
+describe("region overflow diagnostic", () => {
+  const script = (ramLength: string) => `MEMORY { ram (rwx) : ORIGIN = 0x20000000, LENGTH = ${ramLength} }
+SECTIONS {
+  .heap : { . += 0x800; } > ram
+  .stack : { . += 0x1000; } > ram
+}`;
+
+  it("errors when stack + heap exceed the region they are placed in", () => {
+    const { script: parsed } = parseLinkerScript(script("0x1000"));
+    const overflow = validate(parsed).filter((d) => d.code === "region-overflow");
+    assert.strictEqual(overflow.length, 1);
+    assert.strictEqual(overflow[0].severity, "error");
+    assert.ok(overflow[0].message.includes('"ram"'));
+    assert.ok(overflow[0].message.includes("over by 2,048"));
+  });
+
+  it("stays quiet when stack + heap fit, even exactly", () => {
+    for (const length of ["0x1800", "0x4000"]) {
+      const { script: parsed } = parseLinkerScript(script(length));
+      assert.deepStrictEqual(validate(parsed), []);
+    }
   });
 });
 

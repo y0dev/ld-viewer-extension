@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.7 - 2026-10-27
+
+### Added
+
+- Validation now reports an error when the stack and heap reserved in a memory region exceed that region's size. It appears in the status bar count and diagnostics list for every region, not only the selected one.
+
 ## 0.2.6 - 2026-10-27
 
 ### Added

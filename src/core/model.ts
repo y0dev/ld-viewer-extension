@@ -160,6 +160,7 @@ export interface Diagnostic {
   code:
     | "undefined-region"
     | "duplicate-region"
+    | "region-overflow"
     | "missing-origin-or-length"
     | "include-not-found"
     | "parse-error"
